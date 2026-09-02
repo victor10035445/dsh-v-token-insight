@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — 共享统计卡片套件（tasks 5.1，规格「视觉与无障碍」）。
+ * dsh-v-token-insight — 共享统计卡片套件（tasks 5.1，规格「视觉与无障碍」）。
  *
  * 总览页与会话页签共用的五件套：Card / KpiCard / ChartCard / StatBadge /
  * 口径脚注。设计约定（与 charts.mjs 一致）：

@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — ledger.mjs 单测（tasks 4.1 / 7.2）。
+ * dsh-v-token-insight — ledger.mjs 单测（tasks 4.1 / 7.2）。
  * 覆盖：幂等沉淀（last-wins / 重试取终值）、窗口完备性合并（含 null 语义）、
  * 深补覆盖区间与截断标注、损坏回退、压缩老化按「日 × 模型 × 折扣窗口命中」
  * 分桶（L3 语义保留）、孤儿 GC 宽限期、手动清除、配额兜底 persistLedger、
@@ -120,11 +120,11 @@ test("recordDeepCoverage：seq 区间取并集；未截断置满覆盖", () => {
 
 test("loadLedger：损坏 JSON / 非法结构回退空账本，不抛错", () => {
   const storage = fakeStorage();
-  storage.setItem("dsh-token-insight.ledger.v1", "{not json");
+  storage.setItem("dsh-v-token-insight.ledger.v1", "{not json");
   assert.deepEqual(loadLedger(storage), emptyLedger());
-  storage.setItem("dsh-token-insight.ledger.v1", JSON.stringify({ v: 2 }));
+  storage.setItem("dsh-v-token-insight.ledger.v1", JSON.stringify({ v: 2 }));
   assert.deepEqual(loadLedger(storage), emptyLedger());
-  storage.setItem("dsh-token-insight.ledger.v1", JSON.stringify({ v: 1, sessions: { s: { entries: [{ k: "bogus", u: {} }], buckets: [], lastSeen: 1 } } }));
+  storage.setItem("dsh-v-token-insight.ledger.v1", JSON.stringify({ v: 1, sessions: { s: { entries: [{ k: "bogus", u: {} }], buckets: [], lastSeen: 1 } } }));
   const ledger = loadLedger(storage);
   /* 非法条目被净化掉；仅剩 lastSeen 的会话保留（孤儿 GC 的在册标记）。 */
   assert.equal(Object.keys(ledger.sessions).length, 1);

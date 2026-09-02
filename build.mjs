@@ -1,15 +1,15 @@
 /**
- * dsh-token-insight 客户端构建：
+ * dsh-v-token-insight 客户端构建：
  * esbuild 把 src/client.jsx 打包成 factory 形式的 lib/client.js
  * （window.__ModuleLoader__.load 包裹；react / @deepseek-ai/* 全部 external，
  *  由 DSH client-modules 的引导基线提供，见 package.json 的 dsh.client.inject）。
  *
- * 与 dsh-jiuyu-explorer 同构，无虚拟模块；pricing.mjs / stats-fold.mjs /
+ * 与同品牌 V 系列插件同构，无虚拟模块；pricing.mjs / stats-fold.mjs /
  * charts.mjs 是零依赖纯函数模块，既被打进客户端包，也可在 node 下直接单测。
  */
 import * as esbuild from "esbuild";
 
-const banner = `window.__ModuleLoader__.load({ id: "dsh-token-insight", factory: (require) => {
+const banner = `window.__ModuleLoader__.load({ id: "dsh-v-token-insight", factory: (require) => {
 "use strict";
 var module = { exports: {} };
 var exports = module.exports;`;

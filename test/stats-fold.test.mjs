@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — stats-fold.mjs 单测（tasks 5.1）。
+ * dsh-v-token-insight — stats-fold.mjs 单测（tasks 5.1）。
  * 覆盖：formatTokens 边界（999_499→999k / 999_500→1.00M）、loadOlder 前后
  * 累计分档漂移、轮标题（steering 不覆盖、compaction 不选为标题）、
  * 无 usage 步不计聚合、TTFT/吞吐口径、投影双形状 billedInputTokens、

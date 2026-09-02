@@ -1,9 +1,9 @@
 /**
- * dsh-token-insight — Tier 1：本地逐步账本（纯函数 + storage 注入，node 可单测）。
+ * dsh-v-token-insight — Tier 1：本地逐步账本（纯函数 + storage 注入，node 可单测）。
  *
  * 语义（token-stats-overview 规格「本地账本」）：
  *  - 键 (sessionId, turn, step) → {provider, model, 四桶, 发生时刻}；
- *    持久化 localStorage `dsh-token-insight.ledger.v1`，损坏回退空账本；
+ *    持久化 localStorage `dsh-v-token-insight.ledger.v1`，损坏回退空账本；
  *  - 沉淀：会话页签/chip 的 foldTurns+join 结果按 (turn, step) 幂等 upsert
  *    （last-wins，天然覆盖重试取终值）；
  *  - 深度补全：按会话 opt-in 经 session.history 离线折算（stats-fold 的
@@ -42,7 +42,7 @@ import {
 import { dayKeyOf } from "./rows-aggregate.mjs";
 
 /** localStorage 键（v1）。 */
-export const LEDGER_STORE_KEY = "dsh-token-insight.ledger.v1";
+export const LEDGER_STORE_KEY = "dsh-v-token-insight.ledger.v1";
 
 /** 原始条目保留天数（超过卷为聚合桶）。 */
 export const LEDGER_RAW_RETENTION_DAYS = 60;

@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — SVG 图表布局原语（纯函数、零依赖，node 可单测）。
+ * dsh-v-token-insight — SVG 图表布局原语（纯函数、零依赖，node 可单测）。
  *
  * 设计约定（探索阶段结论）：
  *  - 手写 SVG，不引入图表库（DSH 自己的 ContextMeter 即手写堆叠条；

@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — 会话窗口节点 → 每轮聚合（纯函数、零依赖，node 可单测）。
+ * dsh-v-token-insight — 会话窗口节点 → 每轮聚合（纯函数、零依赖，node 可单测）。
  *
  * 输入：客户端会话快照的 legacy 节点（dsh-client-runtime conversation.d.ts 的
  * ConversationNode，经 useSession((s) => s.chat.legacy.nodes) 取得）：

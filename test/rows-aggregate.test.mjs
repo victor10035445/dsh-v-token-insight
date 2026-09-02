@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — rows-aggregate.mjs 单测（tasks 3.1 / 7.2）。
+ * dsh-v-token-insight — rows-aggregate.mjs 单测（tasks 3.1 / 7.2）。
  * 覆盖：cwd 归组与「未知」、子会话独立成行 + 父 cwd 回退、归档交集、
  * blank 排除、投影缺席降级（零计入 / 全缺席「—」）、命中率、时间分桶双口径、
  * 归档数据面缺失守卫、depth 计算。
@@ -63,7 +63,7 @@ test("billedIn / totalTokens / hitPercent 基础口径", () => {
 });
 
 test("projectNameOf：basename（含尾分隔符与混合斜杠）", () => {
-  assert.equal(projectNameOf("F:\\project\\dsh-token-insight"), "dsh-token-insight");
+  assert.equal(projectNameOf("D:\\proj\\demo-app"), "demo-app");
   assert.equal(projectNameOf("/home/u/proj/"), "proj");
   assert.equal(projectNameOf(""), null);
   assert.equal(projectNameOf(void 0), null);

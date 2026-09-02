@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — 客户端源码（由 build.mjs 用 esbuild 打包成
+ * dsh-v-token-insight — 客户端源码（由 build.mjs 用 esbuild 打包成
  * factory 形式的 lib/client.js；react/@deepseek-ai/* 全部 external）。
  *
  * 注册点（探索阶段已核到代码级，均为现成缝隙、零内核改动）：
@@ -82,7 +82,7 @@ import {
 import { BUCKET_SEGMENTS, contextBreakdownLayout, formatAxisTokens, hBarsLayout, lineLayout, stackedBarsLayout } from "./charts.mjs";
 import { Card, ChartCard, Footnote, KpiCard, StatBadge } from "./stats-ui.jsx";
 
-const PLUGIN_ID = "dsh-token-insight";
+const PLUGIN_ID = "dsh-v-token-insight";
 const NS = "token-insight";
 
 /* ------------------------------------------------------------------ *
@@ -839,7 +839,7 @@ let priceEditorDepth = 0;
  * 本地账本运行时（Tier 1）：加载 / 幂等沉淀 / 防抖持久化 / 版本广播
  * ------------------------------------------------------------------ */
 
-const LEDGER_CHANGED_EVENT = "dsh-token-insight:ledger-changed";
+const LEDGER_CHANGED_EVENT = "dsh-v-token-insight:ledger-changed";
 const LEDGER_SAVE_DEBOUNCE_MS = 1500;
 const LEDGER_INGEST_DEBOUNCE_MS = 600;
 
@@ -1305,7 +1305,7 @@ async function copyTextToClipboard(text) {
   }
 }
 
-const COLWIDTHS_KEY = "dsh-token-insight.colwidths.v2";
+const COLWIDTHS_KEY = "dsh-v-token-insight.colwidths.v2";
 const COL_MIN_PCT = 3; /* 单列最小占比（%），防止拖没 */
 const COL_MAX_PCT = 85;
 

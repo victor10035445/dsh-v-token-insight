@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — pricing.mjs 单测（tasks 5.1）。
+ * dsh-v-token-insight — pricing.mjs 单测（tasks 5.1）。
  * 覆盖：档位边界（恰 128k）、跨午夜边界（23:00/08:30 端点）、多模型累计分档、
  * 币种混合（不符步判未定价）、未定价不猜价、中断步不计费、formatMoney。
  */

@@ -1,8 +1,8 @@
 /**
- * dsh-token-insight — 价目表持久化（纯函数、storage 注入，node 可单测）。
+ * dsh-v-token-insight — 价目表持久化（纯函数、storage 注入，node 可单测）。
  *
  * v0 语义（token-pricing 规格「价目表维护与持久化」）：
- *  - 持久化于浏览器 localStorage（键 dsh-token-insight.prices.v1）；
+ *  - 持久化于浏览器 localStorage（键 dsh-v-token-insight.prices.v1）；
  *  - 存储损坏（JSON 解析失败 / 结构非法）时回退内置默认表，不抛错；
  *  - 费用每次按当前价目即时计算、不落库——价目修改后历史轮自然重算。
  * 将来如需跨设备同步，迁到宿主端 settings namespace（settingsScope 机制）。
@@ -11,7 +11,7 @@
 import { DEFAULT_PRICE_TABLE, validatePriceTable } from "./pricing.mjs";
 
 /** localStorage 键（v1）。 */
-export const PRICE_STORE_KEY = "dsh-token-insight.prices.v1";
+export const PRICE_STORE_KEY = "dsh-v-token-insight.prices.v1";
 
 /**
  * 读取当前价目表。
@@ -58,7 +58,7 @@ export function clearPriceTable(storage) {
 }
 
 /** 价目变更通知事件名（编辑器保存后广播，统计页/chip 监听重算）。 */
-export const PRICES_CHANGED_EVENT = "dsh-token-insight:prices-changed";
+export const PRICES_CHANGED_EVENT = "dsh-v-token-insight:prices-changed";
 
 /** 编辑器打开请求事件名（settings 行 → shell.overlay 编辑器）。 */
-export const PRICES_EDIT_EVENT = "dsh-token-insight:edit-prices";
+export const PRICES_EDIT_EVENT = "dsh-v-token-insight:edit-prices";

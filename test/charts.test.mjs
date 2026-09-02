@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — charts.mjs 单测（任务 4.2 / 4.4 / 5.1）。
+ * dsh-v-token-insight — charts.mjs 单测（任务 4.2 / 4.4 / 5.1）。
  * 覆盖：轮次刻度稀疏化（每 ⌈n/8⌉ 取一、至多 8 个）、堆叠条段间 1px 留隙
  * （最底段贴基线满高，上方段底边削 1px）、图表用色全走 --dsw-* 令牌
  * （硬编码色清零守卫；tools 段 #a78bfa 回归哨兵，design D7/D8）。

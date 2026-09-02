@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — 价格表与计费（纯函数、零依赖，node 下可直接单测）。
+ * dsh-v-token-insight — 价格表与计费（纯函数、零依赖，node 下可直接单测）。
  *
  * 设计（探索阶段结论）：
  *  - L1 四桶单价：DSH 的 usage 四桶互斥（dsh-llm TokenUsage）——

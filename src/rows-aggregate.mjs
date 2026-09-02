@@ -1,5 +1,5 @@
 /**
- * dsh-token-insight — Tier 0：sessions 列表行聚合（纯函数、零依赖，node 可单测）。
+ * dsh-v-token-insight — Tier 0：sessions 列表行聚合（纯函数、零依赖，node 可单测）。
  *
  * 输入三快照（均来自宿主标准 props / 服务，零内核改动）：
  *  - rows：useSessions((s) => s.ids.map((id) => s.byId[id])) 的列表行。行形状
