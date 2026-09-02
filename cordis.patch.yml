@@ -1,0 +1,7 @@
+# dsh-token-insight 注册层：把插件挂进 cordis loader。
+# 宿主端入口 lib/index.js 是最小占位（纯客户端插件，无宿主路由）；
+# client-modules 发现本包的 dsh.client 声明后，自动把 lib/client.js
+# 编入 /plugins 客户端启动图（与 dsh-jiuyu-explorer 同机制）。
+- insert:
+    - id: dsh-token-insight
+      name: dsh-token-insight

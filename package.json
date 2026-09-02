@@ -1,0 +1,43 @@
+{
+  "name": "dsh-token-insight",
+  "description": "Token 洞察 —— DSH Web 会话 token 统计插件：第三页签（KPI/图表/每轮明细）+ 回复尾部轻量消耗显示 + 跨会话 Token统计总览（侧栏座位入口，全会话 KPI/工作区/会话/时间/模型维度 + 本地逐步账本）+ 按可维护价目表的费用折算",
+  "version": "0.3.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node --check lib/client.js && node --check lib/index.js",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

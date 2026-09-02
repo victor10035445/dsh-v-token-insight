@@ -1,0 +1,13 @@
+# 依赖不入库；lib/client.js 为构建产物但随源码入库
+# （便于直接以目录形态被 DSH 加载），lib/index.js 为手写宿主端。
+node_modules/
+
+# IDE / 工具目录
+.trae/
+
+# 内部工程过程文档（探索 / 设计 / 任务 / 归档，仅本地保留）
+openspec/
+
+# 手工数据快照与打包产物
+price-table.*.json
+*.tgz
