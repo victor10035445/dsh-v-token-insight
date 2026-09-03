@@ -37,6 +37,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } 
 import {
   BUCKETS,
   DEFAULT_PRICE_TABLE,
+  UNIT,
   displayCurrencyOf,
   formatMoney,
   priceTurnRows,
@@ -47,9 +48,9 @@ import {
   cacheHitPercent,
   foldHistoryEvents,
   foldTurns,
-  formatTokens,
-  joinRequestInsights
+  formatTokens
 } from "./stats-fold.mjs";
+import { foldedWindowOf } from "./window-fold.mjs";
 import {
   LEDGER_STORE_KEY,
   aggregateLedgerViews,
@@ -192,6 +193,8 @@ const zh = {
   "dash.kpi.sessionsSub": "总数 {total} · 归档 {archived} · 运行中 {running}（空会话不计）",
   "dash.kpi.cost": "费用（账本覆盖段）",
   "dash.kpi.costSub": "逐步计费合计 · {covered}/{count} 会话已覆盖",
+  "dash.kpi.avg": "均价（覆盖段）",
+  "dash.kpi.avgSub": "已定价覆盖费用 ÷ 覆盖段计费 Token · 仅供参考",
   "dash.tier0.note": "Tier 0：合计来自会话列表行投影（宿主权威值，含归档会话，实时刷新）；个别行投影缺席时按零计入，以上次计算为准。",
   "dash.tier1.note": "Tier 1：明细与费用仅覆盖本地账本覆盖段（打开过统计页签或执行过「补全」的会话），未覆盖显示「—」。费用按当前价目表即时折算，仅供参考。",
   "dash.archivedMissing": "归档会话不含于当前数据面：归档集合非空，但会话列表未携带归档行。",
@@ -214,6 +217,7 @@ const zh = {
   "dash.col.status": "状态",
   "dash.col.activity": "最近活动",
   "dash.col.hit": "命中率",
+  "dash.col.avg": "均价/MTok",
   "dash.filter.all": "全部",
   "dash.filter.active": "活跃",
   "dash.filter.archived": "归档",
@@ -239,6 +243,7 @@ const zh = {
   "dash.time.costTitle.month": "费用趋势（按月）",
   "dash.time.costTitle.year": "费用趋势（按年）",
   "dash.models.caliber": "仅账本覆盖的消耗有模型归属；「未分类」= 会话权威总量 − 账本已覆盖量，不虚构模型归属。",
+  "dash.models.costNote": "费用 = 该模型覆盖段已定价步的逐步计费合计（未定价步不计，模型/时段见悬停）；均价 = 费用 ÷ 该模型覆盖段计费 Token（与「计费 Token」KPI 同口径），仅供参考。",
   "dash.cost.none": "—",
   "dash.cost.covered": "≈ {cost}",
   "dash.cost.partial": "部分覆盖（{note}）",
@@ -385,6 +390,8 @@ const en = {
   "dash.kpi.sessionsSub": "{total} total · {archived} archived · {running} running (blank excluded)",
   "dash.kpi.cost": "Cost (ledger-covered)",
   "dash.kpi.costSub": "Per-step pricing total · {covered}/{count} sessions covered",
+  "dash.kpi.avg": "Avg cost (covered)",
+  "dash.kpi.avgSub": "Priced covered cost ÷ covered billed tokens · estimate only",
   "dash.tier0.note": "Tier 0: totals come from session-list row projections (host authority, archived sessions included, live refresh); rows missing projections count as zero, values are as-of last computation.",
   "dash.tier1.note": "Tier 1: details and costs cover only the local ledger (sessions whose stats tab was opened or that were deep-completed); uncovered entries show \"—\". Costs are derived on the fly from the current price table; for reference only.",
   "dash.archivedMissing": "Archived sessions are not part of the current data plane: the archive set is non-empty but the session list carries no archived rows.",
@@ -407,6 +414,7 @@ const en = {
   "dash.col.status": "Status",
   "dash.col.activity": "Last activity",
   "dash.col.hit": "Hit rate",
+  "dash.col.avg": "Avg/MTok",
   "dash.filter.all": "All",
   "dash.filter.active": "Active",
   "dash.filter.archived": "Archived",
@@ -432,6 +440,7 @@ const en = {
   "dash.time.costTitle.month": "Cost trend (monthly)",
   "dash.time.costTitle.year": "Cost trend (yearly)",
   "dash.models.caliber": "Only ledger-covered usage carries model attribution; \"Unclassified\" = session authority totals − ledger-covered amounts, never a fabricated attribution.",
+  "dash.models.costNote": "Cost = per-step pricing total of priced covered steps for that model (unpriced steps excluded; see hover for model/time window); Avg = cost ÷ covered billed tokens (same caliber as the \"Billed tokens\" KPI), for reference only.",
   "dash.cost.none": "—",
   "dash.cost.covered": "≈ {cost}",
   "dash.cost.partial": "Partial coverage ({note})",
@@ -656,7 +665,7 @@ body.tsn-colresizing{cursor:col-resize!important;user-select:none}
 .tsn-dash-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .tsn-dash-close:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .tsn-dash-body{flex-direction:column;gap:14px;overflow-y:auto;flex:1;min-height:0;padding:14px 16px 20px;display:flex}
-.tsn-dash-kpis{grid-template-columns:repeat(6, minmax(0, 1fr));gap:8px;display:grid}
+.tsn-dash-kpis{grid-template-columns:repeat(7, minmax(0, 1fr));gap:8px;display:grid}
 .tsn-kpi-sub{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
 .tsn-dash-tabs{border-bottom:1px solid var(--dsw-alias-border-l2);gap:2px;display:flex;flex-wrap:wrap}
 .tsn-dash-tab{color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;padding:8px 12px;font-size:13px;line-height:20px;transition:background-color .15s ease, color .15s ease, border-color .15s ease}
@@ -724,7 +733,7 @@ body.tsn-colresizing{cursor:col-resize!important;user-select:none}
 .tsn-seat[data-active="true"] .tsn-seat-rail{color:var(--dsw-alias-state-business-primary)}
 /* ≤900px 单列化（design D3 断点细则）：显式单列下 span 2 会制造隐式列轨，
    必须同步重置各卡 grid-column 为 auto；首卡/跨全宽卡的 1/-1 在单列下安全。 */
-@media (max-width: 900px){.tsn-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-kpis.tsn-kpis--compact{grid-template-columns:repeat(3, minmax(0, 1fr))}.tsn-charts{grid-template-columns:1fr}.tsn-charts > .tsn-card{grid-column:auto}.tsn-dash-kpis{grid-template-columns:repeat(3, minmax(0, 1fr))}.tsn-dash-grid{grid-template-columns:1fr}.tsn-dash-grid > .tsn-card{grid-column:auto}.tsn-dash-grid > .tsn-card:first-child{grid-column:auto}}
+@media (max-width: 900px){.tsn-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-kpis.tsn-kpis--compact{grid-template-columns:repeat(3, minmax(0, 1fr))}.tsn-charts{grid-template-columns:1fr}.tsn-charts > .tsn-card{grid-column:auto}.tsn-dash-kpis{grid-template-columns:repeat(4, minmax(0, 1fr))}.tsn-dash-grid{grid-template-columns:1fr}.tsn-dash-grid > .tsn-card{grid-column:auto}.tsn-dash-grid > .tsn-card:first-child{grid-column:auto}}
 @media (max-width: 480px){.tsn-form-grid{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-hbar-label{width:88px}.tsn-dash-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-dash-search{min-width:120px}.tsn-kpis.tsn-kpis--compact{grid-template-columns:repeat(3, minmax(0, 1fr))}}
 @media (prefers-reduced-motion: reduce){.tsn-bar,.tsn-btn,.tsn-modal-close,.tsn-expand,.tsn-expand svg,.tsn-card,.tsn-kpi,.tsn-dash-tab,.tsn-row td,.tsn-seg .tsn-btn,.tsn-drill,.tsn-sort svg{transition:none}}
 `;
@@ -1746,6 +1755,10 @@ function DashboardSurface({ useSessions, useWorkspaces, t }) {
   );
   const timeCostPoints = useMemo(() => groupCostByGranularity(trendCostPoints, timeGranularity), [trendCostPoints, timeGranularity]);
   const costCurrency = kpi.cost?.currency ?? displayCurrencyOf(table);
+  /* 均价（覆盖段口径）：分子分母同集合（仅已定价覆盖会话，见 aggregateLedgerViews
+     covered 汇总）；分母 = 覆盖段计费 Token（与「计费 Token」KPI 同口径）。 */
+  const avgCost =
+    views.covered && views.covered.tokens > 0 ? (views.covered.cost / views.covered.tokens) * UNIT : null;
 
   /* 焦点管理：打开移焦入页；关闭返还座位（钻取关闭例外——保持会话内焦点）。 */
   useEffect(() => {
@@ -1860,6 +1873,20 @@ function DashboardSurface({ useSessions, useWorkspaces, t }) {
               )
             }
             sub={t("dash.kpi.costSub", { covered: kpi.cost?.covered ?? 0, count: kpi.cost?.count ?? expanded.length })}
+          />
+          <KpiCard
+            label={t("dash.kpi.avg")}
+            value={
+              avgCost !== null ? (
+                <span className="tsn-money">
+                  {formatMoney(avgCost, costCurrency)}
+                  <span aria-hidden="true">/MTok</span>
+                </span>
+              ) : (
+                "—"
+              )
+            }
+            sub={t("dash.kpi.avgSub")}
           />
         </div>
 
@@ -2025,8 +2052,56 @@ function ModelsAltTable({ rows }) {
   );
 }
 
-/* 按工作区页签：项目归组表（token 列附比例色条）。 */
+/* 按工作区页签：项目归组表（token 列附比例色条；表头排序 + 列宽 + 内部滚动）。 */
 function WorkspacesTab({ t, rows }) {
+  const [sort, setSort] = useState({ key: "total", dir: "desc" });
+  const colctl = useColumnWidths("dash-workspaces");
+  const WORKSPACE_SORT_DIR = {
+    workspace: "asc",
+    sessions: "desc",
+    running: "desc",
+    inputTokens: "desc",
+    cacheReadTokens: "desc",
+    cacheWriteTokens: "desc",
+    outputTokens: "desc",
+    total: "desc",
+    hit: "desc"
+  };
+  const sortValueOfWorkspace = (row, key) => {
+    switch (key) {
+      case "workspace":
+        return row.name ?? null;
+      case "sessions":
+        return row.sessions ?? 0;
+      case "running":
+        return row.running ?? 0;
+      case "hit":
+        return row.cacheHit;
+      case "total":
+        return row.total ?? 0;
+      default:
+        return row.buckets?.[key] ?? 0;
+    }
+  };
+  const toggleSort = (key) => {
+    setSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: WORKSPACE_SORT_DIR[key] ?? "desc" }
+    );
+  };
+  const sortedRows = useMemo(() => {
+    const factor = sort.dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const va = sortValueOfWorkspace(a, sort.key);
+      const vb = sortValueOfWorkspace(b, sort.key);
+      const aNull = va === null || va === void 0;
+      const bNull = vb === null || vb === void 0;
+      if (aNull || bNull) return aNull && bNull ? 0 : aNull ? 1 : -1; /* 缺席值恒排末尾 */
+      if (typeof va === "string" || typeof vb === "string") return factor * String(va).localeCompare(String(vb), "zh");
+      return factor * (va - vb);
+    });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [rows, sort]);
+
   const bucketMax = useMemo(() => {
     const maxes = {};
     for (const segment of BUCKET_SEGMENTS) {
@@ -2035,24 +2110,25 @@ function WorkspacesTab({ t, rows }) {
     return maxes;
   }, [rows]);
   const totalMax = useMemo(() => rows.reduce((max, row) => Math.max(max, row.total ?? 0), 0), [rows]);
+  const gripOf = (key) => <ColResizer {...colctl.gripProps(key)} title={t("dash.colgrip.hint")} />;
   return (
-    <div className="tsn-table-wrap">
-      <table className="tsn-table">
+    <div className="tsn-table-wrap tsn-table-scroll">
+      <table className="tsn-table" style={colctl.tableStyle}>
         <thead>
           <tr>
-            <th>{t("dash.col.workspace")}</th>
-            <th className="tsn-num">{t("dash.col.sessions")}</th>
-            <th className="tsn-num">{t("dash.col.running")}</th>
+            <SortHeader label={t("dash.col.workspace")} sortKey="workspace" sort={sort} onSort={toggleSort} dataCol="workspace" style={colctl.styleOf("workspace")} grip={gripOf("workspace")} />
+            <SortHeader className="tsn-num" label={t("dash.col.sessions")} sortKey="sessions" sort={sort} onSort={toggleSort} dataCol="sessions" style={colctl.styleOf("sessions")} grip={gripOf("sessions")} />
+            <SortHeader className="tsn-num" label={t("dash.col.running")} sortKey="running" sort={sort} onSort={toggleSort} dataCol="running" style={colctl.styleOf("running")} grip={gripOf("running")} />
             {BUCKET_SEGMENTS.map((segment) => (
-              <th key={segment.key} className="tsn-num">{segment.label}</th>
+              <SortHeader key={segment.key} className="tsn-num" label={segment.label} sortKey={segment.key} sort={sort} onSort={toggleSort} dataCol={segment.key} style={colctl.styleOf(segment.key)} grip={gripOf(segment.key)} />
             ))}
-            <th className="tsn-num">{t("dash.col.total")}</th>
-            <th className="tsn-num">{t("dash.col.hit")}</th>
+            <SortHeader className="tsn-num" label={t("dash.col.total")} sortKey="total" sort={sort} onSort={toggleSort} dataCol="total" style={colctl.styleOf("total")} grip={gripOf("total")} />
+            <SortHeader className="tsn-num" label={t("dash.col.hit")} sortKey="hit" sort={sort} onSort={toggleSort} dataCol="hit" style={colctl.styleOf("hit")} grip={gripOf("hit")} />
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.cwd ?? "__unknown__"}>
+          {sortedRows.map((row) => (
+            <tr key={row.cwd ?? "__unknown__"} className="tsn-row">
               <td className="tsn-title-cell" title={row.cwd ?? ""}>{row.name ?? t("dash.workspace.unknown")}</td>
               <td className="tsn-num">{row.sessions}</td>
               <td className="tsn-num">{row.running}</td>
@@ -2655,6 +2731,53 @@ function TimeAltTable({ t, rows }) {
 
 /* 按模型页签：账本聚合 + 「未分类」行（token 列附比例色条）。 */
 function ModelsTab({ t, rows, currency }) {
+  /* 表头点击排序（默认总量降序）+ 列宽拖拽 + 内部滚动（tasks 3.3）。 */
+  const [sort, setSort] = useState({ key: "total", dir: "desc" });
+  const colctl = useColumnWidths("dash-models");
+  const MODEL_SORT_DIR = {
+    model: "asc",
+    inputTokens: "desc",
+    cacheReadTokens: "desc",
+    cacheWriteTokens: "desc",
+    outputTokens: "desc",
+    total: "desc",
+    cost: "desc",
+    avg: "desc"
+  };
+  const avgOf = (row) => (row.cost !== null && row.cost !== void 0 && row.tokens > 0 ? (row.cost / row.tokens) * UNIT : null);
+  const sortValueOfModel = (row, key) => {
+    switch (key) {
+      case "model":
+        return row.model === null || row.model === "" ? null : row.model;
+      case "cost":
+        return row.cost ?? null;
+      case "avg":
+        return avgOf(row);
+      case "total":
+        return row.total ?? 0;
+      default:
+        return row.buckets?.[key] ?? 0;
+    }
+  };
+  const toggleSort = (key) => {
+    setSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: MODEL_SORT_DIR[key] ?? "desc" }
+    );
+  };
+  const sortedRows = useMemo(() => {
+    const factor = sort.dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const va = sortValueOfModel(a, sort.key);
+      const vb = sortValueOfModel(b, sort.key);
+      const aNull = va === null || va === void 0;
+      const bNull = vb === null || vb === void 0;
+      if (aNull || bNull) return aNull && bNull ? 0 : aNull ? 1 : -1; /* 缺席值恒排末尾 */
+      if (typeof va === "string" || typeof vb === "string") return factor * String(va).localeCompare(String(vb), "zh");
+      return factor * (va - vb);
+    });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [rows, sort, t]);
+
   const bucketMax = useMemo(() => {
     const maxes = {};
     for (const segment of BUCKET_SEGMENTS) {
@@ -2663,41 +2786,63 @@ function ModelsTab({ t, rows, currency }) {
     return maxes;
   }, [rows]);
   const totalMax = useMemo(() => rows.reduce((max, row) => Math.max(max, row.total ?? 0), 0), [rows]);
+  const costMax = useMemo(
+    () => rows.reduce((max, row) => Math.max(max, row.cost ?? 0), 0),
+    [rows]
+  );
+  const gripOf = (key) => <ColResizer {...colctl.gripProps(key)} title={t("dash.colgrip.hint")} />;
   return (
     <>
       <Footnote>{t("dash.models.caliber")}</Footnote>
-      <div className="tsn-table-wrap">
-        <table className="tsn-table">
+      <Footnote>{t("dash.models.costNote")}</Footnote>
+      <div className="tsn-table-wrap tsn-table-scroll">
+        <table className="tsn-table" style={colctl.tableStyle}>
           <thead>
             <tr>
-              <th>{t("stats.col.model")}</th>
+              <SortHeader label={t("stats.col.model")} sortKey="model" sort={sort} onSort={toggleSort} dataCol="model" style={colctl.styleOf("model")} grip={gripOf("model")} />
               {BUCKET_SEGMENTS.map((segment) => (
-                <th key={segment.key} className="tsn-num">{segment.label}</th>
+                <SortHeader key={segment.key} className="tsn-num" label={segment.label} sortKey={segment.key} sort={sort} onSort={toggleSort} dataCol={segment.key} style={colctl.styleOf(segment.key)} grip={gripOf(segment.key)} />
               ))}
-              <th className="tsn-num">{t("dash.col.total")}</th>
+              <SortHeader className="tsn-num" label={t("dash.col.total")} sortKey="total" sort={sort} onSort={toggleSort} dataCol="total" style={colctl.styleOf("total")} grip={gripOf("total")} />
+              <SortHeader className="tsn-num" label={t("stats.col.cost")} sortKey="cost" sort={sort} onSort={toggleSort} dataCol="cost" style={colctl.styleOf("cost")} grip={gripOf("cost")} />
+              <SortHeader className="tsn-num" label={t("dash.col.avg")} sortKey="avg" sort={sort} onSort={toggleSort} dataCol="avg" style={colctl.styleOf("avg")} grip={gripOf("avg")} />
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.model ?? "__unclassified__"}>
-                <td className="tsn-title-cell">{row.model === null || row.model === "" ? t("dash.model.unclassified") : row.model}</td>
-                {BUCKET_SEGMENTS.map((segment) => (
-                  <td key={segment.key} className="tsn-num">
-                    <DataBar
-                      ratio={bucketMax[segment.key] > 0 ? (row.buckets?.[segment.key] ?? 0) / bucketMax[segment.key] : 0}
-                      tone={segment.color}
-                    >
-                      {formatTokens(row.buckets?.[segment.key] ?? 0)}
+            {sortedRows.map((row) => {
+              const avg = avgOf(row);
+              const unclassified = row.model === null || row.model === "";
+              return (
+                <tr key={row.model ?? "__unclassified__"} className="tsn-row">
+                  <td className="tsn-title-cell">{unclassified ? t("dash.model.unclassified") : row.model}</td>
+                  {BUCKET_SEGMENTS.map((segment) => (
+                    <td key={segment.key} className="tsn-num">
+                      <DataBar
+                        ratio={bucketMax[segment.key] > 0 ? (row.buckets?.[segment.key] ?? 0) / bucketMax[segment.key] : 0}
+                        tone={segment.color}
+                      >
+                        {formatTokens(row.buckets?.[segment.key] ?? 0)}
+                      </DataBar>
+                    </td>
+                  ))}
+                  <td className="tsn-num">
+                    <DataBar ratio={totalMax > 0 ? (row.total ?? 0) / totalMax : 0}>
+                      {formatTokens(row.total ?? 0)}
                     </DataBar>
                   </td>
-                ))}
-                <td className="tsn-num">
-                  <DataBar ratio={totalMax > 0 ? (row.total ?? 0) / totalMax : 0}>
-                    {formatTokens(row.total ?? 0)}
-                  </DataBar>
-                </td>
-              </tr>
-            ))}
+                  <td className="tsn-num">
+                    {row.cost !== null && row.cost !== void 0 ? (
+                      <span className="tsn-money" title={row.unmatched?.length > 0 ? row.unmatched.join("；") : void 0}>
+                        {costMax > 0 ? <DataBar ratio={(row.cost ?? 0) / costMax} tone="var(--dsw-static-amber-500)">{formatMoney(row.cost, currency)}</DataBar> : formatMoney(row.cost, currency)}
+                      </span>
+                    ) : (
+                      <span title={unclassified ? void 0 : row.unmatched?.join("；")}>—</span>
+                    )}
+                  </td>
+                  <td className="tsn-num">{avg !== null ? formatMoney(avg, currency) : <span>—</span>}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -3073,10 +3218,7 @@ const TokenStatsView = function TokenStatsView({ sessionId, useSession, useProje
   const [expandedTurn, setExpandedTurn] = useState(null);
   const sentinelRef = useRef(null);
 
-  const rows = useMemo(
-    () => joinRequestInsights(foldTurns(nodes), inspection?.requests),
-    [nodes, inspection]
-  );
+  const rows = useMemo(() => foldedWindowOf(nodes, inspection?.requests).rows, [nodes, inspection]);
   const pricedRows = useMemo(() => priceTurnRows(rows, table), [rows, table]);
 
   const totalTokens =
@@ -3096,6 +3238,7 @@ const TokenStatsView = function TokenStatsView({ sessionId, useSession, useProje
 
   /* 明细表排序（用户反馈 #5）：仅排序明细表；图表保持时间线（pricedRows 原序）。 */
   const [detailSort, setDetailSort] = useState({ key: "turn", dir: "asc" });
+  const detailCol = useColumnWidths("session-details");
   const toggleDetailSort = (key) => {
     setDetailSort((prev) =>
       prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: DETAIL_SORT_DIR[key] ?? "desc" }
@@ -3306,19 +3449,19 @@ const TokenStatsView = function TokenStatsView({ sessionId, useSession, useProje
           </div>
         ) : null}
 
-        <div className="tsn-table-wrap">
-          <table className="tsn-table">
+        <div className="tsn-table-wrap tsn-table-scroll">
+          <table className="tsn-table" style={detailCol.tableStyle}>
             <thead>
               <tr>
-                <th aria-label="expand" />
-                <SortHeader label={t("stats.col.turn")} sortKey="turn" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader label={t("stats.col.time")} sortKey="time" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader label={t("stats.col.title")} sortKey="title" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader label={t("stats.col.model")} sortKey="model" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader className="tsn-num" label={t("stats.col.in")} sortKey="in" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader className="tsn-num" label={t("stats.col.out")} sortKey="out" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader className="tsn-num" label={t("stats.col.cache")} sortKey="cache" sort={detailSort} onSort={toggleDetailSort} />
-                <SortHeader className="tsn-num" label={t("stats.col.cost")} sortKey="cost" sort={detailSort} onSort={toggleDetailSort} />
+                <th aria-label="expand" data-col="expand" style={detailCol.styleOf("expand")} />
+                <SortHeader label={t("stats.col.turn")} sortKey="turn" sort={detailSort} onSort={toggleDetailSort} dataCol="turn" style={detailCol.styleOf("turn")} grip={<ColResizer {...detailCol.gripProps("turn")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader label={t("stats.col.time")} sortKey="time" sort={detailSort} onSort={toggleDetailSort} dataCol="time" style={detailCol.styleOf("time")} grip={<ColResizer {...detailCol.gripProps("time")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader label={t("stats.col.title")} sortKey="title" sort={detailSort} onSort={toggleDetailSort} dataCol="title" style={detailCol.styleOf("title")} grip={<ColResizer {...detailCol.gripProps("title")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader label={t("stats.col.model")} sortKey="model" sort={detailSort} onSort={toggleDetailSort} dataCol="model" style={detailCol.styleOf("model")} grip={<ColResizer {...detailCol.gripProps("model")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader className="tsn-num" label={t("stats.col.in")} sortKey="in" sort={detailSort} onSort={toggleDetailSort} dataCol="in" style={detailCol.styleOf("in")} grip={<ColResizer {...detailCol.gripProps("in")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader className="tsn-num" label={t("stats.col.out")} sortKey="out" sort={detailSort} onSort={toggleDetailSort} dataCol="out" style={detailCol.styleOf("out")} grip={<ColResizer {...detailCol.gripProps("out")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader className="tsn-num" label={t("stats.col.cache")} sortKey="cache" sort={detailSort} onSort={toggleDetailSort} dataCol="cache" style={detailCol.styleOf("cache")} grip={<ColResizer {...detailCol.gripProps("cache")} title={t("dash.colgrip.hint")} />} />
+                <SortHeader className="tsn-num" label={t("stats.col.cost")} sortKey="cost" sort={detailSort} onSort={toggleDetailSort} dataCol="cost" style={detailCol.styleOf("cost")} grip={<ColResizer {...detailCol.gripProps("cost")} title={t("dash.colgrip.hint")} />} />
               </tr>
             </thead>
             <tbody>
@@ -3450,16 +3593,13 @@ const AssistantActionsTokenChip = function AssistantActionsTokenChip({ sessionId
   const inspection = useSession((s) => s.views.get("trajectory"));
   const priceVersion = usePriceVersion();
   /* messageId → 轮号：收束消息的节点反查（finalized assistant 节点携带 messageId）。 */
-  const turnNo = useMemo(() => {
-    for (const node of nodes) {
-      if (node.kind === "assistant" && node.messageId === messageId) return node.turn;
-    }
-    return null;
-  }, [nodes, messageId]);
+  const turnNo = useMemo(
+    () => foldedWindowOf(nodes).turnByMessageId.get(messageId) ?? null,
+    [nodes, messageId]
+  );
   const row = useMemo(() => {
     if (turnNo === null) return null;
-    const joined = joinRequestInsights(foldTurns(nodes), inspection?.requests);
-    return joined.find((item) => item.turn === turnNo) ?? null;
+    return foldedWindowOf(nodes, inspection?.requests).rowByTurn.get(turnNo) ?? null;
   }, [nodes, inspection, turnNo]);
   const table = currentPriceTable(priceVersion);
   /* 账本沉淀（喂食来源 A 的旁路）：chip 所在会话未打开统计页签时也能逐轮

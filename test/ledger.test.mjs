@@ -339,3 +339,101 @@ test("stepCost 回归确认（老化桶对照基准）", () => {
   const result = stepCost(entry, usage(1_000_000, 0, 0, 0), { time: 1_700_000_000_000 });
   assert.equal(result.cost, 2);
 });
+
+/* ---------------------------------------------------------------- *
+ * 逐模型费用聚合（tasks 2.1-2.3）：priceLedgerSession.byModel /
+ * aggregateLedgerViews covered 汇总 / 均价口径
+ * ---------------------------------------------------------------- */
+
+/* 无时段窗口的确定性价目（避免 TZ 依赖）。 */
+const FLAT_TABLE = [
+  { model: "m-a", provider: "", currency: "CNY", unit: "MTok", defaultTier: { input: 2, cacheRead: 0.2, cacheWrite: 0, output: 3 }, tiers: [], timeWindows: [], discount: 1 },
+  { model: "m-b", provider: "", currency: "CNY", unit: "MTok", defaultTier: { input: 2, cacheRead: 0.2, cacheWrite: 0, output: 3 }, tiers: [], timeWindows: [], discount: 1 },
+  { model: "m-usd", provider: "", currency: "USD", unit: "MTok", defaultTier: { input: 2, cacheRead: 0.2, cacheWrite: 0, output: 3 }, tiers: [], timeWindows: [], discount: 1 }
+];
+
+test("priceLedgerSession：byModel 逐步归累（多模型、多轮、tokens 与费用）", () => {
+  const ledger = emptyLedger();
+  upsertSessionEntries(ledger, "s1", [
+    turnRow(1, [step(0, { model: "m-a", usage: usage(100, 50, 0, 20) })]),
+    turnRow(2, [
+      step(0, { model: "m-a", usage: usage(200, 0, 0, 40) }),
+      step(1, { model: "m-b", usage: usage(10, 0, 0, 5) })
+    ])
+  ], { nowMs: 1 });
+  const result = priceLedgerSession(ledger, "s1", FLAT_TABLE);
+  assert.equal(result.covered, true);
+  /* m-a: (270 + 520) µ = 790e-6；m-b: 35e-6（无时段折扣、无分档）。 */
+  assert.ok(Math.abs(result.byModel.get("m-a").cost - 790e-6) < 1e-12);
+  assert.equal(result.byModel.get("m-a").tokens, 410);
+  assert.ok(Math.abs(result.byModel.get("m-b").cost - 35e-6) < 1e-12);
+  assert.equal(result.byModel.get("m-b").tokens, 15);
+  assert.ok(Math.abs(result.cost - 825e-6) < 1e-12);
+  assert.equal(result.tokens, 425); /* 410 + 15（四桶合计口径） */
+});
+
+test("priceLedgerSession：未定价步不计费用、不进 byModel、整会话 cost=null", () => {
+  const ledger = emptyLedger();
+  upsertSessionEntries(ledger, "s1", [
+    turnRow(1, [step(0, { model: "m-a", usage: usage(100, 0, 0, 10) })]),
+    turnRow(2, [step(0, { model: "m-unknown", usage: usage(5, 0, 0, 1) })])
+  ], { nowMs: 1 });
+  const result = priceLedgerSession(ledger, "s1", FLAT_TABLE);
+  assert.equal(result.cost, null); /* 任一步未定价 → 轮/会话费用「—」 */
+  assert.equal(result.byModel.has("m-unknown"), false);
+  assert.ok(Math.abs(result.byModel.get("m-a").cost - 230e-6) < 1e-12); /* 已定价步照常归累 */
+  assert.ok(result.unmatched.some((reason) => reason.includes("m-unknown")));
+});
+
+test("priceLedgerSession：币种不符的模型不进 byModel 费用", () => {
+  const ledger = emptyLedger();
+  upsertSessionEntries(ledger, "s1", [turnRow(1, [step(0, { model: "m-usd", usage: usage(10, 0, 0, 5) })])], { nowMs: 1 });
+  const result = priceLedgerSession(ledger, "s1", FLAT_TABLE);
+  assert.equal(result.cost, null);
+  assert.equal(result.byModel.size, 0);
+});
+
+test("priceLedgerSession：老化桶按桶模型归累", () => {
+  const ledger = emptyLedger();
+  ledger.sessions.s1 = {
+    entries: [],
+    buckets: [{ m: "m-a", p: "", u: usage(1000, 0, 0, 500), w: null, day: "2026-09-01" }],
+    coverage: {},
+    lastSeen: 1
+  };
+  const result = priceLedgerSession(ledger, "s1", FLAT_TABLE);
+  /* defaultTier × (1000*2 + 500*3)/1e6 = 3500e-6。 */
+  assert.ok(Math.abs(result.byModel.get("m-a").cost - 3500e-6) < 1e-12);
+  assert.equal(result.byModel.get("m-a").tokens, 1500);
+  assert.ok(Math.abs(result.cost - 3500e-6) < 1e-12);
+});
+
+test("aggregateLedgerViews：covered 汇总（仅已定价覆盖会话）与 byModel 行 cost/tokens", () => {
+  const ledger = emptyLedger();
+  upsertSessionEntries(ledger, "s1", [turnRow(1, [step(0, { model: "m-a", usage: usage(100, 0, 0, 10) })])], { nowMs: 1 });
+  upsertSessionEntries(ledger, "s2", [turnRow(1, [step(0, { model: "m-b", usage: usage(50, 0, 0, 5) })])], { nowMs: 1 });
+  upsertSessionEntries(ledger, "s3", [turnRow(1, [step(0, { model: "m-unknown", usage: usage(7, 0, 0, 1) })])], { nowMs: 1 });
+  const expanded = [
+    { id: "s1", usage: usage(100, 0, 0, 10) },
+    { id: "s2", usage: usage(50, 0, 0, 5) },
+    { id: "s3", usage: usage(7, 0, 0, 1) }
+  ];
+  const views = aggregateLedgerViews(ledger, FLAT_TABLE, expanded);
+  /* s1=(100*2+10*3)/1e6=230e-6、s2=(50*2+5*3)/1e6=115e-6；s3 未定价 → 排除。 */
+  assert.ok(Math.abs(views.covered.cost - 345e-6) < 1e-12);
+  assert.equal(views.covered.tokens, 165); /* 110 + 55，s3 不计入 */
+  const rowA = views.byModel.find((row) => row.model === "m-a");
+  const rowB = views.byModel.find((row) => row.model === "m-b");
+  assert.ok(Math.abs(rowA.cost - 230e-6) < 1e-12);
+  assert.equal(rowA.tokens, 110);
+  assert.ok(Math.abs(rowB.cost - 115e-6) < 1e-12);
+  /* 均价：345e-6 / 165 × 1e6 ≈ 2.0909 ¥/MTok。 */
+  const avg = views.covered.cost / views.covered.tokens * 1e6;
+  assert.ok(Math.abs(avg - (345e-6 / 165 * 1e6)) < 1e-9);
+  /* 未分类行无费用。 */
+  const unc = views.byModel.find((row) => row.model === null);
+  if (unc) {
+    assert.equal(unc.cost, null);
+    assert.equal(unc.tokens, null);
+  }
+});

@@ -416,17 +416,32 @@ function rowsOfEntries(entries) {
  * 一个会话的账本费用（原始条目逐步 + 老化桶）。
  * 原始条目按轮合成 priceTurnRows 的输入（档位/币种守卫齐全）；
  * 老化桶走 bucketSetCost（defaultTier + 记录的窗口命中）。
- * @returns { covered, cost|null, currency, unmatched[], coverage }；
- *   cost=null 表示存在未定价部分（「—」+ 口径说明），完全无覆盖 covered=false。
+ * @returns { covered, cost|null, currency, unmatched[], coverage, tokens, byModel }；
+ *   cost=null 表示存在未定价部分（「—」+ 口径说明），完全无覆盖 covered=false；
+ *   tokens = 该会话覆盖段计费 token（四桶合计，与「计费 Token」KPI 同口径）；
+ *   byModel: Map<model, {cost, tokens}> 逐模型已定价费用与覆盖 token
+ *   （未定价步不计费用、不计入该模型 tokens——均价只对已定价部分计算）。
  */
 export function priceLedgerSession(ledger, sessionId, table) {
   const session = ledger.sessions[sessionId];
   if (session === void 0 || (session.entries.length === 0 && session.buckets.length === 0)) {
-    return { covered: false, cost: null, currency: null, unmatched: [], coverage: session?.coverage ?? {} };
+    return { covered: false, cost: null, currency: null, unmatched: [], coverage: session?.coverage ?? {}, tokens: 0, byModel: new Map() };
   }
   const unmatched = new Map();
   let allPriced = true;
   let cost = 0;
+  let tokens = 0;
+  const byModel = new Map();
+  const bump = (model, addCost, addTokens) => {
+    if (!model) return;
+    let row = byModel.get(model);
+    if (row === void 0) {
+      row = { cost: 0, tokens: 0 };
+      byModel.set(model, row);
+    }
+    row.cost += addCost;
+    row.tokens += addTokens;
+  };
   /* 1) 原始条目：按轮合成行（priceTurnRows 的累计分档键在时间序内递推）。 */
   const priced = priceTurnRows(rowsOfEntries(session.entries), table);
   for (const row of priced) {
@@ -436,6 +451,16 @@ export function priceLedgerSession(ledger, sessionId, table) {
     } else {
       cost += row.cost;
     }
+    /* 逐步归累（task 2.1）：stepPrices 与 steps 平行，未定价步为 null。 */
+    row.steps.forEach((step, index) => {
+      const sp = row.stepPrices[index];
+      const usage = step.usage;
+      if (!sp || !sp.cost || !usage) return;
+      const stepTokens =
+        (usage.inputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) + (usage.outputTokens ?? 0);
+      bump(step.model ?? "", sp.cost, stepTokens);
+      tokens += stepTokens;
+    });
   }
   /* 2) 老化桶。 */
   const displayCurrency = displayCurrencyOf(table);
@@ -458,13 +483,19 @@ export function priceLedgerSession(ledger, sessionId, table) {
       continue;
     }
     cost += result.cost;
+    const bucketTokens =
+      (bucket.u.inputTokens ?? 0) + (bucket.u.cacheReadTokens ?? 0) + (bucket.u.cacheWriteTokens ?? 0) + (bucket.u.outputTokens ?? 0);
+    bump(bucket.m ?? "", result.cost, bucketTokens);
+    tokens += bucketTokens;
   }
   return {
     covered: true,
     cost: allPriced ? cost : null,
     currency: displayCurrency,
     unmatched: [...unmatched.keys()],
-    coverage: session.coverage
+    coverage: session.coverage,
+    tokens,
+    byModel
   };
 }
 
@@ -491,17 +522,22 @@ function coveredBucketsOf(ledger, sessionId) {
  * @param expanded - rows-aggregate.expandRows 产物（Tier 0 行，供「未分类」余量）。
  * @returns {
  *   bySession: Map<sid, priceLedgerSession 结果>,
- *   byModel:   [{model, provider, buckets, total, currency, unmatched}],
+ *   byModel:   [{model, provider, buckets, total, cost|null, tokens|null, currency, unmatched}]
+ *              （cost/tokens = 该模型已定价覆盖段的费用与计费 token，「未分类」行为 null）,
  *   daily:     Map<day, {buckets}>（按步发生时刻，账本覆盖段）,
  *   coveredIds: Set<sid>,
- *   anyCovered: boolean
+ *   anyCovered: boolean,
+ *   covered:   {cost, tokens}（仅已定价覆盖会话计入，与费用卡口径一致——均价卡分子分母）
  * }
  */
 export function aggregateLedgerViews(ledger, table, expanded) {
   const bySession = new Map();
   const modelMap = new Map();
+  const modelCost = new Map();
   const daily = new Map();
   const coveredIds = new Set();
+  let coveredCost = 0;
+  let coveredTokens = 0;
   const accumulateDay = (ms, buckets) => {
     const day = dayKeyOf(ms);
     if (day === null) return;
@@ -517,6 +553,20 @@ export function aggregateLedgerViews(ledger, table, expanded) {
     bySession.set(sid, priced);
     if (!priced.covered) continue;
     coveredIds.add(sid);
+    /* 已定价覆盖会话 → 均价卡分子分母（与费用卡同口径）。 */
+    if (priced.cost !== null) {
+      coveredCost += priced.cost;
+      coveredTokens += priced.tokens ?? 0;
+    }
+    /* 逐模型费用/覆盖 token 归并（task 2.2）。 */
+    for (const [model, agg] of priced.byModel ?? []) {
+      const prev = modelCost.get(model);
+      if (prev === void 0) modelCost.set(model, { ...agg });
+      else {
+        prev.cost += agg.cost;
+        prev.tokens += agg.tokens;
+      }
+    }
     const session = ledger.sessions[sid];
     for (const entry of session.entries) {
       let row = modelMap.get(entry.m);
@@ -545,10 +595,15 @@ export function aggregateLedgerViews(ledger, table, expanded) {
       uncovered[field] += Math.max(0, (usage[field] ?? 0) - (covered[field] ?? 0));
     }
   }
-  const byModel = [...modelMap.values()].map((row) => ({
-    ...row,
-    total: row.buckets.inputTokens + row.buckets.cacheReadTokens + row.buckets.cacheWriteTokens + row.buckets.outputTokens
-  }));
+  const byModel = [...modelMap.values()].map((row) => {
+    const costAgg = modelCost.get(row.model);
+    return {
+      ...row,
+      total: row.buckets.inputTokens + row.buckets.cacheReadTokens + row.buckets.cacheWriteTokens + row.buckets.outputTokens,
+      cost: costAgg !== void 0 && costAgg.cost > 0 ? costAgg.cost : null,
+      tokens: costAgg !== void 0 ? costAgg.tokens : null
+    };
+  });
   if (!isEmptyBuckets(uncovered)) {
     byModel.push({
       model: null,
@@ -556,11 +611,13 @@ export function aggregateLedgerViews(ledger, table, expanded) {
       buckets: uncovered,
       total: BUCKET_FIELDS.reduce((sum, field) => sum + uncovered[field], 0),
       currency: displayCurrencyOf(table),
-      unmatched: []
+      unmatched: [],
+      cost: null,
+      tokens: null
     });
   }
   byModel.sort((a, b) => b.total - a.total);
-  return { bySession, byModel, daily, coveredIds, anyCovered: coveredIds.size > 0 };
+  return { bySession, byModel, daily, coveredIds, anyCovered: coveredIds.size > 0, covered: { cost: coveredCost, tokens: coveredTokens } };
 }
 
 /**
