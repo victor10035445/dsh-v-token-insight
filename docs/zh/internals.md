@@ -10,13 +10,13 @@
 | 尾部轻量显示 | `conversation.chat.assistant-actions` 列表槽（owner `{messageId}`；复制→反馈(10)→本插件(20)→分支→timeEnd） | TurnTailNodeView 的 MessageIconActions |
 | 侧栏座位 | `sidebar.footer.action` 列表槽（root 作用域，owner `{wide}`；order 20 落 cordis 座位后、紧邻设置上方相邻行） | ui-sidebar SidebarRoot / ui-cordis 座位先例 |
 | 总览整页帧 | `shell.overlay` 框架浮层（root 作用域，DOM 序即层序：总览页 40 < 编辑器 50） | ui-layout AppFrame |
-| 总览几何跟踪 | `[data-slot="sidebar"]` 出口（display:contents）父列 `getBoundingClientRect` + ResizeObserver；`[data-sidebar-collapsed]` 折叠判据 | ui-renderer SlotOutlet / ui-layout AppFrame |
+| 总览几何跟踪 | `closest("[data-shell-overlay]")` 属性锚定 → AppFrame frame → 侧栏列（dsh-012：`[data-slot="sidebar"]` 出口已移除，属性锚定对 display:contents 包装层免疫）`getBoundingClientRect` + ResizeObserver；`[data-sidebar-collapsed]` 折叠判据 | ui-renderer SlotOutlet / ui-layout AppFrame |
 | 全会话 KPI（页签） | `useProjection("tokenUsage" / "sessionStats" / "contextPressure" / "contextBreakdown")` | dsh-token-meter / dsh-session-stats |
 | 总览 Tier 0（列表行） | `useSessions`（root 标准 props）快照 `byId` 行：`projectionValues / cwd / parentId / origin / running / blank / updatedAt` + `useWorkspaces` 快照 `archivedSessionIds` | runtime refreshList / projectList / WorkspaceManager |
-| 总览 Tier 1（账本） | `localStorage: dsh-v-token-insight.ledger.v1`；页签/chip 沉淀 + `connection.api.sessions.history({sessionId, beforeSeq?, maxMessages?})` 离线折算 | 本插件 ledger.mjs / dsh-client-connection |
-| 每轮明细 | `useSession(s => s.chat.legacy.nodes)`：`usage / timing / interrupted / step / messageId` | 客户端窗口（50 条/页） |
-| 每步模型/调用参数 | `views.get("trajectory").requests[]` 按 `(turn, step)` join（`message.source` 在 legacy 节点被省略） | ui-trajectory TrajectorySnapshotBuilder |
-| 模型目录（编辑器） | `connection.api.sessions.models({sessionId})` → `SessionModels {current, groups}`；子会话拒绝 → 手输 | ui-model-selection 同款 RPC |
+| 总览 Tier 1（账本） | `localStorage: dsh-v-token-insight.ledger.v2.index` + 每会话分片（`dsh-v-token-insight.ledger.v2.s.<sid>`，紧凑编码 + 5MB 总量预算）；页签/chip 沉淀 + `ctx.remote` 的 `session.follow` 开帧 + `session.page` 翻页离线折算（页间让出 + RTT 退避） | 本插件 ledger.mjs / pacing.mjs / dsh-012 `ctx.remote` |
+| 每轮明细 | `useChat`（dsh-012 快照拆分）：`usage / timing / interrupted / step / messageId` | 客户端窗口（50 条/页） |
+| 每步模型/调用参数 | `useTrajectory`（dsh-012 视图迁移）的 `requests[]` 按 `(turn, step)` join（`message.source` 在 legacy 节点被省略） | ui-trajectory TrajectorySnapshotBuilder |
+| 模型目录（编辑器） | `ctx.remote.session.modelCatalog()` + 本地 `subagentAddress` 前置判定；子会话拒绝 → 手输 | dsh-012 `ctx.remote` typert 面 |
 | 加载更早 | 快照 `hasMore / loadingOlder` + `ctx.get("sessions").binding(id).session.loadOlder()` | SessionFace（条目 inject 提供） |
 | 跳回对应轮 | 页签栏首个 tab（order 0 = chat）DOM 点击 + `chat.locations.getTurn(turn)` 首键 → `[data-chat-anchor-key]` 滚动 | ui-conversation ChatView |
 | 钻取（总览→会话） | `ctx.get("sessions").open(id)` / `subagentAddress(id)`+`openSubagent(address)` → 页签栏「Token」tab DOM 点击 | SessionRuntime.select / selectSubagent |
@@ -90,6 +90,10 @@
 17. **data-slot 测量 spike（实机待验）**：SlotOutlet 锚点为 `display:contents`（无盒），插件测量其父列（`sidebarCol`，真实盒子）右缘——比设计预设的「测出口」更稳；拖拽动画期间 RO 跟帧、折叠/导轨三形态待实机走查；降级 `inset:0` 已备。
 18. **overlay 层内 z 序共存（实机已验并修复）**：实机发现总览页右侧被另一 V 系列插件的 dock（`.jyx-dock{position:fixed; z-index:900}`，预览窗 950）盖住——层内子条目自控几何，显式 z-index 者胜。**处置：总览页帧 `z-index:1000`（> dock 900/预览 950，仍低于该插件的交互浮层 menu 10000/refPop 10002，弹层不被吞）**；价目表编辑器 `.tsn-modal-root` 相应升至 `z-index:1100` 保持总览页之上；官方设置面板为 root 语境 `z-index:1000` fixed 层（不在 overlay layer 的 z=20 语境之内），恒在总览页之上，层级关系正确。
 19. **列表行投影陈旧度（实机观察）**：投影 seq 只存在 ProjectionValueStore 内部行（`values()` 不含 asOfSeq），列表行拿不到逐键水位——UI 以「以上次计算为准」兜底文案声明，不做客户端重算。
-20. **账本老化的 L2 分档退化（实现期取舍）**：原始条目保留窗口（60 天）内逐步精确；老化桶按 defaultTier + 折扣窗口命中计费（L3 保留、L2 不可恢复）——桶在会话明细与图中均带「老化桶」标注，费用语义如实在册。
-21. **深度补全的 RPC 量**：按会话 opt-in、单会话 20 页 × 200 消息预算；「补全全部」不做。归档/子会话的 `session.history` 可用性实机待验（agent-busy 先例：子会话模型目录 RPC 被拒 → fail-soft 同款降级）。
-22. **分支会话祖先消耗的重复计入（待实机验证，`usage-integrity` 规格）**：三条摄入路径——窗口折叠+chip 沉淀、`session.history` 深度补全、Tier 0 投影 KPI——对分支会话均无祖先边界防御；若宿主以「事件拷贝」物化分支（祖先事件连同 usage 进入新会话数据面），祖先消耗会被二次计入。期望语义：祖先消耗归属原会话，分支会话只计新增。实机验证四项：① 分支新会话的窗口是否含祖先 assistant 节点且带 usage；② 对分支会话深补后账本是否出现祖先轮条目；③ 分支会话 `tokenUsage` 投影与原会话的数值关系；④ `sessions.list` 行有无分支标注（`origin` 现仅 `"subagent"`）。有可判定证据时按规格排除祖先轮；无可判定证据不擅自截断（防误杀正常轮）。
+20. **账本老化的 L2 分档退化（实现期取舍）**：原始条目保留固化窗口内逐步精确（v0.4.0 起 2 天，见第 23 条预算编排）；老化桶按 defaultTier + 折扣窗口命中计费（L3 保留、L2 不可恢复）——桶在会话明细与图中均带「老化桶」标注，费用语义如实在册。
+21. **深度补全的 RPC 量**：按会话 opt-in、单会话 20 页 × 200 消息预算；「补全全部」不做（v0.4.0 起深补通道改 `ctx.remote` follow+page，见第 25/26 条；运行中会话不参与）。
+22. **分支会话祖先消耗的重复计入（已实测确认并修复，`usage-integrity` 规格）**：宿主 `sessions.fork` 以 `seed: events.slice(0, cut)` 把父会话全部事件（含 usage）复制进子会话日志、token-meter 不感知种子边界——实测三个会话 usage 完全一致、按 3 份重复计数。修复：fork 会话（有 `parentId` 且非 subagent）**会话级整排**——投影与账本条目不进 KPI/工作区/按模型/趋势/费用线任一合计（种子段与新增段条目级不可切分，整排为既定取舍，fork 后新增消耗仅在其明细行可见）；行保留 +「分支」徽标 + 信息条披露排除数（`dash.fork.excluded`）。
+23. **账本 v2 分片存储与总量预算**：索引键 + 每会话分片 + 紧凑编码（条目体积 ≈ −62%）；持久化五步编排：常规固化（2 天窗口）+ 孤儿 GC → 水位估算（5MB 字符口径 + 分片尺寸缓存）→ 会话粒度收紧重试 → 全固化档重估 → 按 `lastSeen` 整会话逐出至预算 − 256KB headroom；全败落内存模式。`lastSeen = 0`（新近性未知）不参与孤儿 GC（防元数据缺失被放大为整本清除）。
+24. **账面计价（落盘费用）**：持久化时把单遍计价产物快照进分片（`{v, ev, fp, cur, cost, mc, bm, dc, um}`，PRICING_ENGINE_VERSION 版本戳 + FNV-1a 价目指纹）；费用展示走三级解析序（账面价 → 会话级定点重算 → 全账本重导出），价目编辑不改写历史；定价快照计入尺寸缓存与总量预算。
+25. **dsh-012 宿主迁移三落点**：① 快照拆分——`legacy.nodes`/`locations`/`turnTimings`/trajectory 改读 `useChat`/`useTrajectory` 标准钩子；② `connection.api` 消失——深补改 `ctx.remote.session.follow`（开帧取 cursor）+ `page`（按 seq 翻页，20 页 × 200 消息预算，`binding.loadOlder` 被 openState 门控故弃用）、模型目录改 `remote.session.modelCatalog()`、预览采样走 `eventSource` 离线折算；③ `data-slot="sidebar"` 移除——几何锚改 `closest("[data-shell-overlay]")` 属性锚定。`dsh.client.inject` 基线清空，宿主按需自举。
+26. **深补节奏治理（pacing.mjs）**：页间让出（常规 40ms，RTT EWMA >1500ms 升档 ×2 至 1500ms 封顶、<750ms 半步回落、临界维持）——针对「重建/自动深补 × 子会话风暴」两次宿主 OOM 的插件侧止血；运行中会话不参与深补（移动靶）。

@@ -2,7 +2,9 @@
  * dsh-v-token-insight — rows-aggregate.mjs 单测（tasks 3.1 / 7.2）。
  * 覆盖：cwd 归组与「未知」、子会话独立成行 + 父 cwd 回退、归档交集、
  * blank 排除、投影缺席降级（零计入 / 全缺席「—」）、命中率、时间分桶双口径、
- * 归档数据面缺失守卫、depth 计算。
+ * 归档数据面缺失守卫、depth 计算；fix-partial-coverage：趋势余量
+ * （computeTrendRemainders 截零/全零不入/fork 排除 + aggregateByTime 余量归并、
+ * 老化桶重新入柱、「更早」窗口）与一致性断言（趋势合计 ≡ 投影合计 − fork）。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +18,7 @@ import {
   archivedMissingFromList,
   billedIn,
   bucketsOfProjection,
+  computeTrendRemainders,
   dayKeyOf,
   expandRows,
   groupCostByGranularity,
@@ -63,7 +66,7 @@ test("billedIn / totalTokens / hitPercent 基础口径", () => {
 });
 
 test("projectNameOf：basename（含尾分隔符与混合斜杠）", () => {
-  assert.equal(projectNameOf("D:\\proj\\demo-app"), "demo-app");
+  assert.equal(projectNameOf("F:\\project\\dsh-v-token-insight"), "dsh-v-token-insight");
   assert.equal(projectNameOf("/home/u/proj/"), "proj");
   assert.equal(projectNameOf(""), null);
   assert.equal(projectNameOf(void 0), null);
@@ -178,12 +181,77 @@ test("aggregateWorkspaces：同项目聚合、无 cwd 归「未知」、workspac
 test("aggregateWorkspaces：子会话并入父项目（父 cwd 回退）", () => {
   const expanded = expandRows([
     row({ id: "p", cwd: "/w/beta" }),
-    row({ id: "c", parentId: "p" })
+    row({ id: "c", parentId: "p", origin: "subagent" })
   ]);
   const groups = aggregateWorkspaces(expanded, null);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].name, "beta");
   assert.equal(groups[0].sessions, 2);
+});
+
+test("aggregateWorkspaces：按工作区费用求和（已定价合计 + 未定价计数 + 无覆盖「—」）", () => {
+  const expanded = expandRows([
+    row({ id: "a", cwd: "F:\\proj\\alpha" }),
+    row({ id: "b", cwd: "F:\\proj\\alpha" }),
+    row({ id: "c", cwd: "F:\\proj\\alpha" }),
+    row({ id: "d", cwd: "F:\\proj\\beta" })
+  ]);
+  const ledgerBySession = new Map([
+    ["a", { covered: true, cost: 1.25, currency: "CNY", unmatched: [], coverage: {} }],
+    ["b", { covered: true, cost: 2.5, currency: "CNY", unmatched: [], coverage: {} }],
+    /* 覆盖但未定价（如未知模型）：计入 costUnpriced，不计入金额 */
+    ["c", { covered: true, cost: null, currency: "CNY", unmatched: ["未知模型:无价目"], coverage: {} }],
+    /* d 无账本覆盖：不参与 */
+  ]);
+  const groups = aggregateWorkspaces(expanded, null, ledgerBySession);
+  const alpha = groups.find((group) => group.cwd === "F:\\proj\\alpha");
+  assert.equal(alpha.cost, 3.75);
+  assert.equal(alpha.costPriced, 2);
+  assert.equal(alpha.costUnpriced, 1);
+  assert.equal(alpha.currency, "CNY");
+  const beta = groups.find((group) => group.cwd === "F:\\proj\\beta");
+  assert.equal(beta.cost, null); /* 无任何已定价会话 → 「—」 */
+  assert.equal(beta.costPriced, 0);
+  assert.equal(beta.costUnpriced, 0);
+  /* 未传账本面（旧调用形状）→ cost = null，其余字段不受影响 */
+  const plain = aggregateWorkspaces(expanded, null);
+  assert.equal(plain.find((group) => group.cwd === "F:\\proj\\alpha").cost, null);
+  assert.equal(plain.find((group) => group.cwd === "F:\\proj\\alpha").total, 3 * 470);
+});
+
+test("aggregateWorkspaces：fork 行不参与归组合计", () => {
+  const expanded = expandRows([
+    row({ id: "p", cwd: "/w/x" }),
+    row({ id: "f", parentId: "p", cwd: "/w/x" })
+  ]);
+  const groups = aggregateWorkspaces(expanded, null);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sessions, 1); /* fork 不进组 */
+  assert.equal(groups[0].total, 470);
+});
+
+test("expandRows：fork 分支识别（parentId 且非 subagent）；KPI 排除其副本消耗", () => {
+  const expanded = expandRows([
+    row({ id: "p" }),
+    row({ id: "f", parentId: "p" }),
+    row({ id: "c", parentId: "p", origin: "subagent" })
+  ]);
+  const fork = expanded.find((item) => item.id === "f");
+  const sub = expanded.find((item) => item.id === "c");
+  assert.equal(fork.isFork, true);
+  assert.equal(fork.isSub, true);
+  assert.equal(sub.isFork, false); /* subagent 委派子会话不是 fork */
+  assert.equal(sub.isSub, true);
+  const kpi = aggregateKpi(expanded, []);
+  assert.equal(kpi.billedTotal, 940); /* p + c 各 470；f 是父会话消耗的副本，不计入 */
+  assert.equal(kpi.sessions, 3); /* fork 仍是会话，计数保留 */
+});
+
+test("aggregateSessions：fork 行透传 isFork（行保留可查）", () => {
+  const expanded = expandRows([row({ id: "f", parentId: "p" })]);
+  const rows = aggregateSessions(expanded, [], null);
+  assert.equal(rows[0].isFork, true);
+  assert.equal(rows[0].covered, false);
 });
 
 /* ---------------------------------------------------------------- *
@@ -289,6 +357,26 @@ test("aggregateByTime：按月颗粒度超 12 个自然月归「更早」", () =
   assert.equal(rows.length, 2);
 });
 
+test("aggregateByTime：maxBuckets 桶数上限——超限最旧桶并入「更早」，不足上限全量显示", () => {
+  const now = Date.now();
+  /* 5 个不同年份（365 天步进必跨年），上限 3 桶。 */
+  const expanded = expandRows(
+    [0, 1, 2, 3, 4].map((index) => row({ id: `y${index}`, updatedAt: now - index * 365 * 86_400_000 }))
+  );
+  const rows = aggregateByTime(expanded, new Map(), new Set(), { granularity: "year", maxBuckets: 3 });
+  assert.equal(rows[0].day, "older"); /* 最旧 2 个年份（5 − 3）并入「更早」 */
+  assert.equal(totalTokens(rows[0].buckets), 940); /* 2 × 470 */
+  assert.equal(rows.length, 4); /* 「更早」+ 3 个年份行 */
+  assert.deepEqual(
+    rows.slice(1).map((item) => item.day),
+    [2, 1, 0].map((index) => String(new Date(now - index * 365 * 86_400_000).getFullYear()))
+  );
+  /* 不足上限：全量显示、无「更早」。 */
+  const all = aggregateByTime(expanded, new Map(), new Set(), { granularity: "year", maxBuckets: 10 });
+  assert.equal(all.length, 5);
+  assert.equal(all.some((item) => item.day === "older"), false);
+});
+
 test("aggregateByTime：默认颗粒度保持按日既有行为（日键原样）", () => {
   const now = Date.now();
   const day = dayKeyOf(now);
@@ -343,9 +431,248 @@ test("aggregateByModel：零余量不加「未分类」行", () => {
   assert.equal(rows.length, 1);
 });
 
+test("aggregateByModel：费用字段透传；「未分类」行 cost 恒 null", () => {
+  const rows = aggregateByModel(
+    [
+      { model: "m1", buckets: { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 5 }, total: 15, cost: 0.75, avgCost: 0.05, currency: "CNY", unmatched: [] },
+      { model: "m2", buckets: { inputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 }, total: 1, cost: null, avgCost: null, currency: "CNY", unmatched: [] }
+    ],
+    {
+      inputTokens: 3,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 2
+    }
+  );
+  assert.equal(rows[0].cost, 0.75);
+  assert.equal(rows[0].avgCost, 0.05);
+  assert.equal(rows.find((r) => r.model === "m2").cost, null);
+  assert.equal(rows.find((r) => r.model === null).cost, null); /* 未分类行不可归因 */
+  assert.equal(rows.find((r) => r.model === null).avgCost, null);
+});
+
 test("archivedMissingFromList：归档集合非空但列表不携带 → 数据面缺失", () => {
   const expanded = expandRows([row({ id: "a" })]);
   assert.equal(archivedMissingFromList(expanded, ["ghost"]), true);
   assert.equal(archivedMissingFromList(expandRows([row({ id: "a" }), row({ id: "g" })]), ["g"]), false);
   assert.equal(archivedMissingFromList(expanded, []), false);
+});
+
+test("expandRows：投影缺席回退账本四桶（usageSource 口径标记；投影在场一律投影优先）", () => {
+  const fallback = new Map([
+    ["s-absent", { inputTokens: 11, cacheReadTokens: 22, cacheWriteTokens: 3, outputTokens: 44 }],
+    ["s-both", { inputTokens: 999, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 999 }]
+  ]);
+  const rows = [
+    row({ id: "s-proj", projectionValues: { tokenUsage: usage(100, 300, 20, 50) } }),
+    row({ id: "s-absent", projectionValues: void 0 }),
+    row({ id: "s-both", projectionValues: { tokenUsage: usage(0, 0, 0, 0) } }),
+    row({ id: "s-none", projectionValues: void 0 })
+  ];
+  const byId = new Map(expandRows(rows, fallback).map((item) => [item.id, item]));
+  assert.equal(byId.get("s-proj").usageSource, "projection");
+  assert.equal(byId.get("s-proj").usage.inputTokens, 100);
+  assert.equal(byId.get("s-absent").usageSource, "ledger");
+  assert.equal(byId.get("s-absent").usage.cacheReadTokens, 22);
+  assert.equal(byId.get("s-both").usageSource, "projection"); /* 投影在场含真零也以投影为准 */
+  assert.equal(byId.get("s-both").usage.inputTokens, 0);
+  assert.equal(byId.get("s-none").usageSource, "none");
+  assert.equal(byId.get("s-none").usage, null);
+  /* 既有单参签名行为不变：无兜底时缺席即 none */
+  const bare = new Map(expandRows(rows).map((item) => [item.id, item]));
+  assert.equal(bare.get("s-absent").usageSource, "none");
+  assert.equal(bare.get("s-absent").usage, null);
+});
+
+/* ---------------------------------------------------------------- *
+ * 趋势余量：computeTrendRemainders + aggregateByTime 归并
+ * （fix-partial-coverage 1.4）
+ * ---------------------------------------------------------------- */
+
+const bucketRow = (input = 0, cacheRead = 0, cacheWrite = 0, output = 0) => ({
+  inputTokens: input,
+  cacheReadTokens: cacheRead,
+  cacheWriteTokens: cacheWrite,
+  outputTokens: output
+});
+
+test("computeTrendRemainders：投影 − 已按日入柱，逐桶截零", () => {
+  const dailyBucketsBySession = new Map([["s1", bucketRow(120, 300, 20, 30)]]);
+  const expanded = expandRows([row({ id: "s1", projectionValues: { tokenUsage: usage(100, 300, 20, 50) } })]);
+  const remainders = computeTrendRemainders(expanded, dailyBucketsBySession);
+  /* 输入 −120 截零；输出 +20 保留。 */
+  assert.deepEqual(remainders.get("s1"), { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 20 });
+});
+
+test("computeTrendRemainders：全零不入；无键（未覆盖）不产生余量", () => {
+  const dailyBucketsBySession = new Map([
+    ["s-zero", bucketRow(100, 300, 20, 50)], /* 投影 == 账本 → 全零 */
+    ["s-covered", bucketRow(1, 0, 0, 0)]
+  ]);
+  const expanded = expandRows([
+    row({ id: "s-zero" }),
+    row({ id: "s-uncovered", updatedAt: 1_700_000_000_000 }),
+    row({ id: "s-covered", projectionValues: { tokenUsage: usage(5, 0, 0, 0) } })
+  ]);
+  const remainders = computeTrendRemainders(expanded, dailyBucketsBySession);
+  assert.equal(remainders.size, 1);
+  assert.deepEqual(remainders.get("s-covered"), bucketRow(4, 0, 0, 0));
+  assert.equal(remainders.has("s-zero"), false);
+  assert.equal(remainders.has("s-uncovered"), false); /* 无键走既有整桶路径 */
+});
+
+test("computeTrendRemainders：fork 行排除（其投影本就全量排除）", () => {
+  const dailyBucketsBySession = new Map([["p", bucketRow(0, 0, 0, 0)], ["f", bucketRow(0, 0, 0, 0)]]);
+  const expanded = expandRows([row({ id: "p" }), row({ id: "f", parentId: "p" })]);
+  const remainders = computeTrendRemainders(expanded, dailyBucketsBySession);
+  assert.equal(remainders.has("f"), false);
+  assert.ok(remainders.has("p"));
+});
+
+test("aggregateByTime：余量并入——覆盖段按步归日 + 余量整桶落 updatedAt（「按最近活动」徽标）", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const yesterday = dayKeyOf(now - 86_400_000);
+  const expanded = expandRows([row({ id: "partial", updatedAt: now })]);
+  const ledgerDaily = new Map([[yesterday, { buckets: bucketRow(200, 0, 0, 0) }]]);
+  const remainders = new Map([["partial", bucketRow(270, 0, 0, 0)]]);
+  const rows = aggregateByTime(expanded, ledgerDaily, new Set(["partial"]), { remainders });
+  const coveredRow = rows.find((item) => item.day === yesterday);
+  const remainderRow = rows.find((item) => item.day === today);
+  assert.equal(totalTokens(coveredRow.buckets), 200); /* 覆盖段按步发生时刻归日 */
+  assert.equal(coveredRow.source, "ledger");
+  assert.equal(totalTokens(remainderRow.buckets), 270); /* 余量整桶落 updatedAt */
+  assert.equal(remainderRow.source, "recent"); /* 与未覆盖会话共用「按最近活动」徽标 */
+});
+
+test("aggregateByTime：余量与覆盖段同日 → 合并桶标 mixed", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const expanded = expandRows([row({ id: "partial", updatedAt: now })]);
+  const ledgerDaily = new Map([[today, { buckets: bucketRow(200, 0, 0, 0) }]]);
+  const remainders = new Map([["partial", bucketRow(270, 0, 0, 0)]]);
+  const rows = aggregateByTime(expanded, ledgerDaily, new Set(["partial"]), { remainders });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].day, today);
+  assert.equal(rows[0].source, "mixed");
+  assert.equal(totalTokens(rows[0].buckets), 470);
+});
+
+test("aggregateByTime：全零余量不入（covered 行照旧跳过）；缺省 remainders 行为不变", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const expanded = expandRows([row({ id: "covered", updatedAt: now })]);
+  const rows = aggregateByTime(expanded, new Map(), new Set(["covered"]), {
+    remainders: new Map([["covered", bucketRow(0, 0, 0, 0)]])
+  });
+  assert.equal(rows.length, 0); /* 全零余量：不产生任何桶 */
+  /* 缺省 remainders（旧调用形状）：covered 行整行跳过，既有行为不变。 */
+  const legacy = aggregateByTime(expanded, new Map([[today, { buckets: bucketRow(7, 0, 0, 0) }]]), new Set(["covered"]));
+  assert.equal(legacy.length, 1);
+  assert.equal(totalTokens(legacy[0].buckets), 7);
+  assert.equal(legacy[0].source, "ledger");
+});
+
+test("aggregateByTime：updatedAt === null 的余量行照旧跳过", () => {
+  const expanded = expandRows([{ id: "no-time", displayTitle: "x", running: false, blank: false, updatedAt: void 0, projectionValues: { tokenUsage: usage(100, 0, 0, 0) } }]);
+  const rows = aggregateByTime(expanded, new Map(), new Set(["no-time"]), {
+    remainders: new Map([["no-time", bucketRow(100, 0, 0, 0)]])
+  });
+  assert.equal(rows.length, 0);
+});
+
+test("aggregateByTime：含 fork 行时其余量不并入（投影副本不进趋势）", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const expanded = expandRows([row({ id: "p", updatedAt: now }), row({ id: "f", parentId: "p", updatedAt: now })]);
+  const rows = aggregateByTime(expanded, new Map(), new Set(["p", "f"]), {
+    /* 防御性构造：即便上游误传 fork 余量，也不得入桶。 */
+    remainders: new Map([["f", bucketRow(999, 0, 0, 0)], ["p", bucketRow(100, 0, 0, 0)]])
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(totalTokens(rows[0].buckets), 100); /* 只有 p 的余量 */
+});
+
+test("aggregateByTime：含老化桶会话——老化段经余量重新入柱、费用线不受余量影响", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const expanded = expandRows([row({ id: "aging", updatedAt: now })]);
+  /* 仅老化桶会话：dailyBuckets 占位全零键（aggregateLedgerViews 产物形状）。 */
+  const dailyBucketsBySession = new Map([["aging", bucketRow(0, 0, 0, 0)]]);
+  const remainders = computeTrendRemainders(expanded, dailyBucketsBySession);
+  assert.deepEqual(remainders.get("aging"), bucketRow(100, 300, 20, 50)); /* 全投影成为余量 */
+  const rows = aggregateByTime(expanded, new Map(), new Set(["aging"]), { remainders });
+  assert.equal(rows.length, 1);
+  assert.equal(totalTokens(rows[0].buckets), 470); /* 老化段经余量按最近活动重新入柱 */
+  /* 费用线不因余量变化：费用点 = 日键并集 ∪ dailyCost，值只读 dailyCost
+     （与 client.jsx trendCostPoints 同式）——余量日费用恒 0，不虚构金额。 */
+  const dailyCost = new Map([[today, { cost: 2, currency: "CNY" }]]);
+  const points = [...new Set(rows.map((item) => item.day))].filter((day) => day !== "older").sort()
+    .map((day) => ({ day, cost: dailyCost.get(day)?.cost ?? 0 }));
+  assert.deepEqual(points, [{ day: today, cost: 2 }]); /* 只含账本覆盖段费用 */
+});
+
+test("aggregateByTime：余量落超窗 updatedAt → 「更早」桶（窗口行为不变）", () => {
+  const now = Date.now();
+  const old = now - 400 * 86_400_000;
+  const expanded = expandRows([row({ id: "aging", updatedAt: old }), row({ id: "new", updatedAt: now })]);
+  const remainders = new Map([["aging", bucketRow(470, 0, 0, 0)]]);
+  const rows = aggregateByTime(expanded, new Map(), new Set(["aging"]), { remainders });
+  assert.equal(rows[0].day, "older");
+  assert.equal(rows[0].source, "recent");
+  assert.equal(totalTokens(rows[0].buckets), 470);
+  assert.equal(rows.length, 2);
+});
+
+/* ---------------------------------------------------------------- *
+ * 一致性断言（fix-partial-coverage 1.5，验收核心）：
+ * 覆盖 / 部分覆盖 / 未覆盖 / 含老化桶 / fork 混合，投影全部在场、无孤儿——
+ * 趋势行合计（含「更早」）≡ 投影合计 − fork 投影 ≡ KPI token 合计。
+ * ---------------------------------------------------------------- */
+
+test("一致性断言：趋势行合计（含「更早」）≡ 投影合计 − fork 投影（混合人群）", () => {
+  const now = Date.now();
+  const dayOf = (offset) => dayKeyOf(now - offset * 86_400_000);
+  const projection = usage(100, 300, 20, 50); /* 四桶总量 470 */
+  const expanded = expandRows([
+    row({ id: "s-full", updatedAt: now, projectionValues: { tokenUsage: projection } }),
+    row({ id: "s-partial", updatedAt: now, projectionValues: { tokenUsage: projection } }),
+    row({ id: "s-uncovered", updatedAt: now - 400 * 86_400_000, projectionValues: { tokenUsage: projection } }),
+    row({ id: "s-aging", updatedAt: now, projectionValues: { tokenUsage: projection } }),
+    row({ id: "s-parent", updatedAt: now, projectionValues: { tokenUsage: projection } }),
+    row({ id: "s-fork", parentId: "s-parent", updatedAt: now, projectionValues: { tokenUsage: projection } })
+  ]);
+  /* dailyBucketsBySession：s-full 全覆盖、s-partial 部分（逐桶 270/470）、
+     s-aging 仅老化桶（全零占位）；s-uncovered/s-fork 无键；s-parent 覆盖段在
+     ledgerDaily。s-partial 的覆盖段逐桶一致（投影的子集）。 */
+  const dailyBucketsBySession = new Map([
+    ["s-full", bucketRow(100, 300, 20, 50)],
+    ["s-partial", bucketRow(100, 150, 0, 20)],
+    ["s-aging", bucketRow(0, 0, 0, 0)],
+    ["s-parent", bucketRow(100, 300, 20, 50)]
+  ]);
+  const ledgerDaily = new Map([
+    [dayOf(1), { buckets: bucketRow(100, 300, 20, 50) }], /* s-full 覆盖段 */
+    [dayOf(2), { buckets: bucketRow(100, 150, 0, 20) }], /* s-partial 覆盖段 */
+    [dayOf(3), { buckets: bucketRow(100, 300, 20, 50) }] /* s-parent 覆盖段 */
+  ]);
+  const coveredIds = new Set(dailyBucketsBySession.keys());
+  const remainders = computeTrendRemainders(expanded, dailyBucketsBySession);
+  assert.deepEqual(remainders.get("s-partial"), bucketRow(0, 150, 20, 30)); /* 部分覆盖余量 200 */
+  assert.deepEqual(remainders.get("s-aging"), bucketRow(100, 300, 20, 50)); /* 老化段余量 */
+  assert.equal(remainders.has("s-full"), false);
+  assert.equal(remainders.has("s-uncovered"), false);
+  assert.equal(remainders.has("s-fork"), false);
+  const trendRows = aggregateByTime(expanded, ledgerDaily, coveredIds, { remainders });
+  const trendTotal = trendRows.reduce((sum, item) => sum + item.total, 0); /* 含「更早」 */
+  const projectionTotal = expanded.reduce((sum, item) => sum + (item.isFork ? 0 : totalTokens(item.usage)), 0);
+  const kpi = aggregateKpi(expanded, [], null);
+  assert.equal(projectionTotal, 5 * 470); /* 5 个非 fork 会话 */
+  assert.equal(kpi.billedTotal, projectionTotal); /* KPI 同值 */
+  assert.equal(trendTotal, projectionTotal); /* 趋势（含「更早」）同值——缺陷指纹断言 */
+  /* 超窗的未覆盖会话落「更早」，老会话不再从趋势中消失。 */
+  assert.equal(trendRows.some((item) => item.day === "older" && totalTokens(item.buckets) === 470), true);
+  /* 颗粒度升档（年，无窗口）恒等依旧成立。 */
+  const yearRows = aggregateByTime(expanded, ledgerDaily, coveredIds, { remainders, granularity: "year" });
+  assert.equal(yearRows.reduce((sum, item) => sum + item.total, 0), projectionTotal);
 });

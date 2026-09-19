@@ -1,0 +1,282 @@
+{
+  "views": {
+    "bySession": {
+      "s-live": {
+        "covered": true,
+        "cost": 4.92,
+        "currency": "CNY",
+        "unmatched": [],
+        "coverage": {
+          "turnFrom": 1,
+          "turnTo": 2,
+          "windowFull": true
+        },
+        "byModel": {
+          "deepseek-chat": {
+            "cost": 3.32,
+            "tokens": {
+              "inputTokens": 2000000,
+              "cacheReadTokens": 200000,
+              "cacheWriteTokens": 0,
+              "outputTokens": 100000
+            }
+          },
+          "glm-5.3-flash": {
+            "cost": 1.6,
+            "tokens": {
+              "inputTokens": 500000,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "outputTokens": 1000000
+            }
+          }
+        }
+      },
+      "s-aged": {
+        "covered": true,
+        "cost": 5.949999999999999,
+        "currency": "CNY",
+        "unmatched": [],
+        "coverage": {
+          "turnFrom": 3,
+          "turnTo": 3,
+          "windowFull": false,
+          "deepFromSeq": 5,
+          "deepToSeq": 100,
+          "deepTruncated": true
+        },
+        "byModel": {
+          "deepseek-chat": {
+            "cost": 3.15,
+            "tokens": {
+              "inputTokens": 2250000,
+              "cacheReadTokens": 500000,
+              "cacheWriteTokens": 0,
+              "outputTokens": 350000
+            }
+          },
+          "glm-5.3-flash": {
+            "cost": 2.8,
+            "tokens": {
+              "inputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "outputTokens": 2000000
+            }
+          }
+        }
+      },
+      "s-unpriced": {
+        "covered": true,
+        "cost": null,
+        "currency": "CNY",
+        "unmatched": [
+          "unknown-model:无价目"
+        ],
+        "coverage": {
+          "turnFrom": 1,
+          "turnTo": 1,
+          "windowFull": true
+        },
+        "byModel": {}
+      },
+      "s-currency": {
+        "covered": true,
+        "cost": null,
+        "currency": "CNY",
+        "unmatched": [
+          "usd-model:币种不符(USD)"
+        ],
+        "coverage": {
+          "turnFrom": 1,
+          "turnTo": 1,
+          "windowFull": true
+        },
+        "byModel": {}
+      },
+      "s-repair": {
+        "covered": true,
+        "cost": null,
+        "currency": "CNY",
+        "unmatched": [
+          "未知模型:无价目"
+        ],
+        "coverage": {
+          "turnFrom": 1,
+          "turnTo": 1,
+          "windowFull": false
+        },
+        "byModel": {}
+      },
+      "s-fork": {
+        "covered": true,
+        "cost": 4.92,
+        "currency": "CNY",
+        "unmatched": [],
+        "coverage": {
+          "turnFrom": 1,
+          "turnTo": 2,
+          "windowFull": true
+        },
+        "byModel": {
+          "deepseek-chat": {
+            "cost": 3.32,
+            "tokens": {
+              "inputTokens": 2000000,
+              "cacheReadTokens": 200000,
+              "cacheWriteTokens": 0,
+              "outputTokens": 100000
+            }
+          },
+          "glm-5.3-flash": {
+            "cost": 1.6,
+            "tokens": {
+              "inputTokens": 500000,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "outputTokens": 1000000
+            }
+          }
+        }
+      },
+      "s-empty": {
+        "covered": false,
+        "cost": null,
+        "currency": null,
+        "unmatched": [],
+        "coverage": {},
+        "byModel": {}
+      }
+    },
+    "byModel": [
+      {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+        "buckets": {
+          "inputTokens": 4250000,
+          "cacheReadTokens": 700000,
+          "cacheWriteTokens": 0,
+          "outputTokens": 450000
+        },
+        "total": 5400000,
+        "currency": "CNY",
+        "unmatched": [],
+        "cost": 6.47,
+        "avgCost": 1.1981481481481482
+      },
+      {
+        "model": "glm-5.3-flash",
+        "provider": "zhipu",
+        "buckets": {
+          "inputTokens": 500000,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 3000000
+        },
+        "total": 3500000,
+        "currency": "CNY",
+        "unmatched": [],
+        "cost": 4.4,
+        "avgCost": 1.2571428571428571
+      },
+      {
+        "model": null,
+        "provider": "",
+        "buckets": {
+          "inputTokens": 660000,
+          "cacheReadTokens": 30000,
+          "cacheWriteTokens": 0,
+          "outputTokens": 1660000
+        },
+        "total": 2350000,
+        "currency": "CNY",
+        "unmatched": [],
+        "cost": null,
+        "avgCost": null
+      },
+      {
+        "model": "unknown-model",
+        "provider": "deepseek",
+        "buckets": {
+          "inputTokens": 100000,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 0
+        },
+        "total": 100000,
+        "currency": "CNY",
+        "unmatched": [
+          "unknown-model:无价目"
+        ],
+        "cost": null,
+        "avgCost": null
+      },
+      {
+        "model": "",
+        "provider": "deepseek",
+        "buckets": {
+          "inputTokens": 80000,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 20000
+        },
+        "total": 100000,
+        "currency": "CNY",
+        "unmatched": [
+          "未知模型:无价目"
+        ],
+        "cost": null,
+        "avgCost": null
+      },
+      {
+        "model": "usd-model",
+        "provider": "deepseek",
+        "buckets": {
+          "inputTokens": 50000,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 0
+        },
+        "total": 50000,
+        "currency": "CNY",
+        "unmatched": [
+          "usd-model:币种不符(USD)"
+        ],
+        "cost": null,
+        "avgCost": null
+      }
+    ],
+    "daily": {
+      "2026-01-10": {
+        "inputTokens": 4150000,
+        "cacheReadTokens": 700000,
+        "cacheWriteTokens": 0,
+        "outputTokens": 400000
+      },
+      "2026-01-11": {
+        "inputTokens": 830000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 3070000
+      }
+    },
+    "coveredIds": [
+      "s-aged",
+      "s-currency",
+      "s-live",
+      "s-repair",
+      "s-unpriced"
+    ],
+    "anyCovered": true
+  },
+  "daily": {
+    "2026-01-10": {
+      "cost": 9.14,
+      "currency": "CNY"
+    },
+    "2026-01-11": {
+      "cost": 6.65,
+      "currency": "CNY"
+    }
+  }
+}

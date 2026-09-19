@@ -11,3 +11,6 @@ openspec/
 # 手工数据快照与打包产物
 price-table.*.json
 *.tgz
+
+# 分支副本（dsh-token-insight，仅本地保留；移植来源）
+dsh-token-insight/

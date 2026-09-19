@@ -2,10 +2,12 @@
  * dsh-v-token-insight 客户端构建：
  * esbuild 把 src/client.jsx 打包成 factory 形式的 lib/client.js
  * （window.__ModuleLoader__.load 包裹；react / @deepseek-ai/* 全部 external，
- *  由 DSH client-modules 的引导基线提供，见 package.json 的 dsh.client.inject）。
+ *  由 DSH client-modules 提供——dsh-012 起引导基线已清空（package.json
+ *  dsh.client.inject = []），宿主按需自举）。
  *
  * 与同品牌 V 系列插件同构，无虚拟模块；pricing.mjs / stats-fold.mjs /
- * charts.mjs 是零依赖纯函数模块，既被打进客户端包，也可在 node 下直接单测。
+ * charts.mjs / pacing.mjs / plan-store.mjs 是零依赖纯函数模块，
+ * 既被打进客户端包，也可在 node 下直接单测。
  */
 import * as esbuild from "esbuild";
 

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_PRICE_TABLE,
   displayCurrencyOf,
+  formatAxisMoney,
   formatMoney,
   matchPriceEntry,
   priceTurnRows,
@@ -237,13 +238,32 @@ test("reasoning 已含于输出，不重复计价（桶字段不含 reasoning �
  * 未定价 / 币种一致性
  * ---------------------------------------------------------------- */
 
-test("轮内混入无价目步 → 该轮未定价并标注模型", () => {
+test("轮内混入无价目步 → 未定价步不计入，已定价步照常合计并标注原因", () => {
   const rows = [
     row(1, [
       step("deepseek-chat", usage({ inputTokens: 100_000 })),
       step("mystery-model", usage({ inputTokens: 100_000 }))
     ])
   ];
+  const priced = priceTurnRows(rows, DEFAULT_PRICE_TABLE);
+  assert.equal(priced[0].cost, 0.2); /* deepseek-chat 0.1M 输入 × ¥2/MTok；mystery-model 不计入 */
+  assert.deepEqual(priced[0].unmatched, ["mystery-model:无价目"]);
+});
+
+test("空模型步（不可归因条目）→ 不计入费用，标注「未知模型」", () => {
+  const rows = [
+    row(1, [
+      step("deepseek-chat", usage({ inputTokens: 100_000 })),
+      step("", usage({ inputTokens: 100_000 }))
+    ])
+  ];
+  const priced = priceTurnRows(rows, DEFAULT_PRICE_TABLE);
+  assert.equal(priced[0].cost, 0.2);
+  assert.deepEqual(priced[0].unmatched, ["未知模型:无价目"]);
+});
+
+test("整轮全部无价目 → cost = null（显示「未定价」）", () => {
+  const rows = [row(1, [step("mystery-model", usage({ inputTokens: 100_000 }))])];
   const priced = priceTurnRows(rows, DEFAULT_PRICE_TABLE);
   assert.equal(priced[0].cost, null);
   assert.deepEqual(priced[0].unmatched, ["mystery-model:无价目"]);
@@ -282,8 +302,22 @@ test("formatMoney：≥1 两位小数，小金额四位，未知币种无符号"
   assert.equal(formatMoney(NaN, "CNY"), "¥—");
 });
 
+test("formatAxisMoney：三档位——≥1 整数化、0<c<1 至多 4 位小数剥尾零、0 → ¥0（rework-kpi-charts 任务 1.3）", () => {
+  /* ≥1：整数化剥 .00 尾缀（既有行为不变）。 */
+  assert.equal(formatAxisMoney(50, "CNY"), "¥50");
+  assert.equal(formatAxisMoney(50.4, "CNY"), "¥50");
+  /* 0<c<1：至多 4 位小数剥尾零——MUST NOT 取整坍缩为 ¥0.0000。 */
+  assert.equal(formatAxisMoney(0.3, "CNY"), "¥0.3");
+  assert.equal(formatAxisMoney(0.05, "CNY"), "¥0.05");
+  assert.equal(formatAxisMoney(0.2500001, "CNY"), "¥0.25");
+  /* 0 → ¥0（渲染侧零刻度本就不出文本）。 */
+  assert.equal(formatAxisMoney(0, "CNY"), "¥0");
+  /* 非有限兜底走 formatMoney。 */
+  assert.equal(formatAxisMoney(NaN, "CNY"), "¥—");
+});
+
 test("validatePriceTable：合法表保留，结构损坏返回 null", () => {
-  assert.ok(validatePriceTable(DEFAULT_PRICE_TABLE).length === 19);
+  assert.ok(validatePriceTable(DEFAULT_PRICE_TABLE).length === 20);
   assert.equal(validatePriceTable("nope"), null);
   assert.equal(validatePriceTable([]), null);
   assert.equal(validatePriceTable([{ model: "" }]), null);
@@ -297,4 +331,101 @@ test("validatePriceTable：合法表保留，结构损坏返回 null", () => {
   assert.equal(cleaned[0].tiers.length, 0);
   assert.equal(cleaned[0].timeWindows.length, 0);
   assert.equal(cleaned[0].discount, 1);
+});
+
+/* ------------------------------------------------------------------ *
+ * DeepSeek 2026-09-16 调价固化
+ * （来源：https://api-docs.deepseek.com/zh-cn/quick_start/pricing/）
+ * 现行模型名 deepseek-flash 空闲 0.02/1/4、高峰 ×2；旧名 v4-flash 系同价；
+ * deepseek-v4-pro 本次单价未变。价格是纯数据，这里钉住以防回归误改。
+ * ------------------------------------------------------------------ */
+
+test("DEFAULT_PRICE_TABLE：deepseek-flash 空闲 0.02/1/4、高峰 ×2（2026-09-16 官方调价）", () => {
+  const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, "deepseek-flash");
+  assert.ok(entry, "现行模型名 deepseek-flash 必须有价目条目（否则真实会话全部「无价目」）");
+  assert.deepEqual(entry.defaultTier, { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 });
+
+  /* 三桶各 1M：空闲 ¥(1+0.02+4) = ¥5.02；高峰 ×2 = ¥10.04。 */
+  const oneMtokEach = usage({
+    inputTokens: 1_000_000,
+    cacheReadTokens: 1_000_000,
+    outputTokens: 1_000_000
+  });
+  const peak = new Date(2026, 8, 16, 10, 0); /* 周三 10:00，落在 09:00–12:00 高峰窗 */
+  assert.equal(timeMultiplier(entry, peak), 2);
+  const peakCost = stepCost(entry, oneMtokEach, { time: peak }).cost;
+  assert.ok(Math.abs(peakCost - 10.04) < 1e-9, `高峰应为 ¥10.04，实得 ${peakCost}`);
+
+  const offPeak = new Date(2026, 8, 16, 13, 0); /* 周三 13:00，窗口之外 */
+  assert.equal(timeMultiplier(entry, offPeak), 1);
+  const offCost = stepCost(entry, oneMtokEach, { time: offPeak }).cost;
+  assert.ok(Math.abs(offCost - 5.02) < 1e-9, `空闲应为 ¥5.02，实得 ${offCost}`);
+});
+
+test("DEFAULT_PRICE_TABLE：旧名 v4-flash / v4-flash-vision-exp 与 Flash 同价（官方仍接受并按 Flash 计费）", () => {
+  const flash = matchPriceEntry(DEFAULT_PRICE_TABLE, "deepseek-flash");
+  for (const legacy of ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]) {
+    const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, legacy);
+    assert.ok(entry, `${legacy} 必须保留独立条目（历史步骤折算；网关仍可能回传旧名）`);
+    assert.equal(entry.model, legacy, `${legacy} 应命中自身条目`);
+    assert.deepEqual(entry.defaultTier, flash.defaultTier, `${legacy} 应与 Flash 同价`);
+    assert.deepEqual(entry.timeWindows, flash.timeWindows);
+  }
+});
+
+test("DEFAULT_PRICE_TABLE：deepseek-v4-pro 本次调价未变（空闲 0.15/4.5/13.5，高峰 ×2）", () => {
+  const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, "deepseek-v4-pro");
+  assert.ok(entry);
+  assert.deepEqual(entry.defaultTier, { input: 4.5, cacheRead: 0.15, cacheWrite: 0, output: 13.5 });
+  assert.equal(timeMultiplier(entry, new Date(2026, 8, 16, 10, 0)), 2);
+});
+
+test("DEFAULT_PRICE_TABLE：币种与停用别名不受调价影响", () => {
+  /* 显示币种取首条目；新增 deepseek-flash 不得挤到首位。 */
+  assert.equal(DEFAULT_PRICE_TABLE[0].model, "deepseek-chat");
+  assert.equal(displayCurrencyOf(DEFAULT_PRICE_TABLE), "CNY");
+  /* 停用别名（deepseek-chat / deepseek-reasoner）保留旧价仅用于历史折算。 */
+  for (const retired of ["deepseek-chat", "deepseek-reasoner"]) {
+    const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, retired);
+    assert.deepEqual(entry.defaultTier, { input: 2, cacheRead: 0.2, cacheWrite: 0, output: 3 });
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * 智谱 bigmodel 调价固化
+ * （来源：https://docs.bigmodel.cn/cn/guide/start/pricing）
+ * glm-5.3-flash 的 5 折限时价 2026-09-09 到期，已恢复刊例价。
+ * ------------------------------------------------------------------ */
+
+test("DEFAULT_PRICE_TABLE：glm-5.3-flash 恢复刊例价 0.8/0.23/2.8（促销已到期）", () => {
+  const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, "glm-5.3-flash");
+  assert.ok(entry);
+  assert.deepEqual(entry.defaultTier, { input: 0.8, cacheRead: 0.23, cacheWrite: 0, output: 2.8 });
+});
+
+test("DEFAULT_PRICE_TABLE：智谱主力模型默认档与官方刊例一致", () => {
+  const expected = {
+    "glm-5.3": { input: 8, cacheRead: 2, cacheWrite: 0, output: 28 },
+    "glm-5.2": { input: 8, cacheRead: 2, cacheWrite: 0, output: 28 },
+    "glm-5.1": { input: 6, cacheRead: 1.3, cacheWrite: 0, output: 24 },
+    "glm-5": { input: 4, cacheRead: 1, cacheWrite: 0, output: 18 },
+    "glm-5-turbo": { input: 5, cacheRead: 1.2, cacheWrite: 0, output: 22 },
+    "glm-4.7-flashx": { input: 0.5, cacheRead: 0.1, cacheWrite: 0, output: 3 }
+  };
+  for (const [model, tier] of Object.entries(expected)) {
+    assert.deepEqual(matchPriceEntry(DEFAULT_PRICE_TABLE, model).defaultTier, tier, model);
+  }
+});
+
+test("DEFAULT_PRICE_TABLE：智谱 ≥32K 输入高档（glm-5.1 / 5 / 5-turbo）", () => {
+  const expected = {
+    "glm-5.1": { minContextTokens: 32768, input: 8, cacheRead: 2, cacheWrite: 0, output: 28 },
+    "glm-5": { minContextTokens: 32768, input: 6, cacheRead: 1.5, cacheWrite: 0, output: 22 },
+    "glm-5-turbo": { minContextTokens: 32768, input: 7, cacheRead: 1.8, cacheWrite: 0, output: 26 }
+  };
+  for (const [model, tier] of Object.entries(expected)) {
+    const entry = matchPriceEntry(DEFAULT_PRICE_TABLE, model);
+    assert.deepEqual(resolveTier(entry, { contextTokens: 32768 - 1 }), entry.defaultTier, `${model} 32K 以下走默认档`);
+    assert.deepEqual(resolveTier(entry, { contextTokens: 32768 }), tier, `${model} 恰 32K 命中高档`);
+  }
 });

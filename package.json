@@ -1,7 +1,7 @@
 {
   "name": "dsh-v-token-insight",
-  "description": "V Token Insight · Token 洞察 —— DSH Web 会话 token 统计插件：第三页签（KPI/图表/每轮明细）+ 回复尾部轻量消耗显示 + 跨会话 Token统计总览（侧栏座位入口，全会话 KPI/工作区/会话/时间/模型维度 + 本地逐步账本）+ 按可维护价目表的费用折算",
-  "version": "0.3.0",
+  "description": "V Token Insight · Token 洞察 —— DSH Web 会话 token 统计与费用洞察插件：第三页签（KPI/双轴图表/每轮明细/累计费用）+ 回复尾部轻量消耗显示（共享折叠缓存）+ 跨会话 Token统计总览（侧栏座位入口含速度仪表，7 卡 KPI/工作区/会话/模型维度/计划目标柱 + 本地逐步账本 v2 分片存储 + 账面计价）+ 每日/每月计划 + fork 分支去重 + 价目表费用折算",
+  "version": "0.4.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -23,13 +23,7 @@
     },
     "client": {
       "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-sidebar"
-      ]
+      "inject": []
     }
   },
   "scripts": {

@@ -12,6 +12,8 @@ import {
   billedInputTokens,
   cacheHitPercent,
   foldTurns,
+  formatMillions,
+  formatTodayDps,
   formatTokens,
   joinRequestInsights,
   sumUsage
@@ -33,6 +35,35 @@ test("formatTokens 边界：999_499→999k，999_500→1.00M", () => {
   assert.equal(formatTokens(999_500), "1.00M");
   assert.equal(formatTokens(1_234_567), "1.23M");
   assert.equal(formatTokens(undefined), "0");
+});
+
+/* ---------------------------------------------------------------- *
+ * formatMillions / formatTodayDps（rework-kpi-charts 任务 1.1 / 1.2）
+ * ---------------------------------------------------------------- */
+
+test("formatMillions：≥1M 取整、<1M 一位小数剥尾零（合并卡「115 / 0.2」读数）", () => {
+  assert.equal(formatMillions(115_100_000), "115"); // ≥1M 四舍五入取整（1.4M → "1"）
+  assert.equal(formatMillions(1_400_000), "1");
+  assert.equal(formatMillions(980_000), "1"); // 0.98M → 一位小数 "1.0" → 剥尾零 "1"
+  assert.equal(formatMillions(200_000), "0.2");
+  assert.equal(formatMillions(0), "0");
+  assert.equal(formatMillions(undefined), "0");
+  /* 规格场景：计费输入 115.1M、输出 0.2M → 「115 / 0.2」 */
+  assert.equal(`${formatMillions(115_100_000)} / ${formatMillions(200_000)}`, "115 / 0.2");
+});
+
+test("formatTodayDps：验算例 158,400 / 3,600s → 「44」；<1 → 「<1」；跨零点窗口 → 「—」", () => {
+  assert.equal(formatTodayDps(158_400, 3_600_000), "44");
+  assert.equal(formatTodayDps(0, 3_600_000), "<1");
+  assert.equal(formatTodayDps(500, 3_600_000), "<1");
+  assert.equal(formatTodayDps(1_000, 60_000), "17"); // 恰 60s 窗口出口：1000/60 → 16.67 → 17
+  assert.equal(formatTodayDps(158_400, 59_999), "—"); // <60s → 「—」（跨零点一个刷新节拍内）
+  assert.equal(formatTodayDps(0, 30_000), "—");
+  assert.equal(formatTodayDps(158_400, undefined), "—");
+  /* 跨零点序列：「—」→「<1」→ 整数（分母自洽重置后依次恢复）。 */
+  assert.equal(formatTodayDps(0, 59_000), "—");
+  assert.equal(formatTodayDps(50, 61_000), "<1");
+  assert.equal(formatTodayDps(1_000_000, 61_000), "16393");
 });
 
 /* ---------------------------------------------------------------- *
@@ -288,4 +319,124 @@ test("requests 缺省/空/仅 compaction 时不改行（引用相等）；忽略
   // 未命中行的行对象保持原引用
   const joined = joinRequestInsights(rows, [{ purpose: "assistant", turn: 1, step: 2 }]);
   assert.equal(joined[0], rows[0]);
+});
+
+/* ---------------------------------------------------------------- *
+ * 共享折叠产物（perf-hot-path-optimization 任务 2.2，D1/R1）
+ * ---------------------------------------------------------------- */
+
+import { foldTurnsShared, joinRequestInsightsShared } from "../src/stats-fold.mjs";
+
+const chipNode = (turn, stepIdx, messageId, usage) =>
+  assistantNode(turn, stepIdx, { messageId, provenance: { provider: "ds", model: "deepseek-chat" }, usage });
+
+const multiTurnNodes = () => [
+  userNode("第一问", 100),
+  chipNode(1, 1, "msg-1", { inputTokens: 10, outputTokens: 5 }),
+  chipNode(1, 2, "msg-2", { inputTokens: 8, outputTokens: 3 }),
+  userNode("第二问", 200),
+  chipNode(2, 1, "msg-3", { inputTokens: 6, outputTokens: 2 }),
+  steerNode("补充", 250),
+  chipNode(2, 2, "msg-4", { inputTokens: 4, outputTokens: 1 })
+];
+
+test("foldTurnsShared：多消费点产物引用相等（缓存命中），内容与 foldTurns 逐值一致", () => {
+  const nodes = multiTurnNodes();
+  const first = foldTurnsShared(nodes);
+  const second = foldTurnsShared(nodes);
+  assert.equal(second, first); /* 同窗口引用相等 */
+  assert.deepEqual(first.rows, foldTurns(nodes)); /* 输出与独立折叠逐值一致 */
+  /* 页签与 chip 共用：join 产物引用相等且 rows 一致 */
+  const requests = [{ purpose: "assistant", turn: 1, step: 1, provenance: { provider: "ds", model: "deepseek-chat" } }];
+  assert.equal(joinRequestInsightsShared(first, requests), joinRequestInsightsShared(first, requests));
+  assert.deepEqual(joinRequestInsightsShared(first, requests).rows, joinRequestInsights(foldTurns(nodes), requests));
+});
+
+test("foldTurnsShared：同一数组对象原地变异后重算（签名兜底）", () => {
+  /* 末节点变异（宿主流式常态：末节点对象替换） */
+  const nodes = multiTurnNodes();
+  const before = foldTurnsShared(nodes);
+  nodes[nodes.length - 1] = { ...nodes[nodes.length - 1], usage: { inputTokens: 99, outputTokens: 99 } };
+  const after = foldTurnsShared(nodes);
+  assert.notEqual(after, before);
+  assert.equal(after.rows[1].usage.inputTokens, 105); /* 重算反映新内容（6 + 99） */
+  /* 首节点前插（loadOlder 常态：数组结构变化） */
+  const nodes2 = multiTurnNodes();
+  const before2 = foldTurnsShared(nodes2);
+  nodes2.unshift(userNode("更早的问题", 50), chipNode(0, 1, "msg-0", { inputTokens: 1, outputTokens: 1 }));
+  const after2 = foldTurnsShared(nodes2);
+  assert.notEqual(after2, before2);
+  assert.equal(after2.rows.length, 3);
+  assert.equal(after2.rows[0].turn, 0);
+  /* 末尾追加（长度变化） */
+  const nodes3 = multiTurnNodes();
+  const before3 = foldTurnsShared(nodes3);
+  nodes3.push(chipNode(3, 1, "msg-9", { inputTokens: 2, outputTokens: 2 }));
+  assert.notEqual(foldTurnsShared(nodes3), before3);
+});
+
+test("foldTurnsShared：不同窗口互不串扰；foldTurnsShared 固定默认 titleMaxLength", () => {
+  const nodesA = multiTurnNodes();
+  const nodesB = multiTurnNodes(); /* 内容相同、数组身份不同 */
+  const artifactA = foldTurnsShared(nodesA);
+  const artifactB = foldTurnsShared(nodesB);
+  assert.notEqual(artifactA, artifactB);
+  assert.deepEqual(artifactA.rows, artifactB.rows);
+  /* Shared 变体不接受 titleMaxLength 覆盖（options 不进缓存键）：
+     长标题按默认 60 截断，与 foldTurns 默认一致。 */
+  const longText = "长".repeat(120);
+  const longNodes = [userNode(longText, 1), chipNode(1, 1, "m", { inputTokens: 1 })];
+  assert.equal(foldTurnsShared(longNodes).rows[0].title, foldTurns(longNodes)[0].title);
+  assert.ok(foldTurnsShared(longNodes).rows[0].title.length <= 60);
+});
+
+test("joinRequestInsightsShared：不同 requests 互不串扰；未触碰行时 rows 保持 fold 原引用", () => {
+  const artifact = foldTurnsShared(multiTurnNodes());
+  const untouched = joinRequestInsightsShared(artifact, void 0);
+  assert.equal(untouched, artifact); /* 无 requests：fold 产物本身 */
+  assert.equal(joinRequestInsightsShared(artifact, []).rows, artifact.rows);
+  /* 未命中任何行 → joinRequestInsights 返回原数组 → 产物即 fold 产物 */
+  const miss = joinRequestInsightsShared(artifact, [{ purpose: "assistant", turn: 9, step: 1, provenance: { provider: "x", model: "y" } }]);
+  assert.equal(miss.rows, artifact.rows);
+  /* 不同 requests（同 fold 产物）→ 不同 join 产物（节点无 provenance，join 必触碰） */
+  const bare = foldTurnsShared([
+    assistantNode(1, 1, { messageId: "b-1", usage: { inputTokens: 1 } }),
+    assistantNode(2, 1, { messageId: "b-2", usage: { inputTokens: 2 } })
+  ]);
+  const r1 = [{ purpose: "assistant", turn: 1, step: 1, provenance: { provider: "ds", model: "model-a" } }];
+  const r2 = [{ purpose: "assistant", turn: 1, step: 1, provenance: { provider: "ds", model: "model-b" } }];
+  const joined1 = joinRequestInsightsShared(bare, r1);
+  const joined2 = joinRequestInsightsShared(bare, r2);
+  assert.notEqual(joined1, joined2);
+  assert.notEqual(joined1.rows, joined2.rows);
+  assert.equal(joined1.rows[0].steps[0].model, "model-a");
+  assert.equal(joined2.rows[0].steps[0].model, "model-b");
+});
+
+test("轮定位索引：messageId→turn / turn→row 与线性扫描逐一一致（O(1) 取代 O(N) 反查）", () => {
+  const nodes = multiTurnNodes();
+  const artifact = foldTurnsShared(nodes);
+  /* messageId→turn：与 chip 既有线性反查（首个 assistant 命中）一致 */
+  for (const node of nodes) {
+    if (node.kind !== "assistant") continue;
+    const expected = nodes.find((candidate) => candidate.kind === "assistant" && candidate.messageId === node.messageId)?.turn ?? null;
+    assert.equal(artifact.turnByMessageId.get(node.messageId) ?? null, expected);
+  }
+  assert.equal(artifact.turnByMessageId.get("missing"), void 0);
+  /* turn→row：与 rows.find 一致 */
+  for (const row of artifact.rows) {
+    assert.equal(artifact.rowByTurn.get(row.turn), artifact.rows.find((candidate) => candidate.turn === row.turn));
+  }
+  assert.equal(artifact.rowByTurn.get(99), void 0);
+  /* join 触碰行后：rowByTurn 指向 join 后的行对象（chip 取到的行与页签一致） */
+  const requests = [{ purpose: "assistant", turn: 1, step: 1, provenance: { provider: "ds", model: "deepseek-chat" } }];
+  const joined = joinRequestInsightsShared(artifact, requests);
+  for (const row of joined.rows) {
+    assert.equal(joined.rowByTurn.get(row.turn), joined.rows.find((candidate) => candidate.turn === row.turn));
+  }
+  /* 空窗口产物形状完整 */
+  const empty = foldTurnsShared([]);
+  assert.deepEqual(empty.rows, []);
+  assert.equal(empty.turnByMessageId.size, 0);
+  assert.equal(empty.rowByTurn.size, 0);
 });

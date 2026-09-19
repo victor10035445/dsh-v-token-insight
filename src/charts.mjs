@@ -53,10 +53,17 @@ function niceScale(maxValue, { targetTicks = 4, minStep = 1 } = {}) {
  * @param rows - foldTurns 行（升序；读 usage 四桶）。
  * @param options.width/height - 绘图区尺寸（px）。
  * @param options.pad - 内边距 {top,right,bottom,left}。
- * @returns { bars, yMax, ticks, xLabels }：
- *   bars[i] = { turn, x, y, w, h, total, segments: [{key,label,color,value,y,h}] }。
+ * @param options.target - 可选目标参考柱 {key, value}（key = 行键 turn|day，value =
+ *   计划值 Token/天，token-stats-plan 消费方；value 非正有限数视为缺席——「未设置」
+ *   不是 0，绝不把计划当作 0 参与缩放）。目标值 MUST 参与 Y 轴缩放（与数据同刻度，
+ *   否则轮廓柱出界或贴底失真）。
+ * @returns { bars, yMax, ticks, xLabels, targetBar }：
+ *   bars[i] = { turn, x, y, w, h, total, segments: [{key,label,color,value,y,h}] }；
+ *   targetBar = { key, value, x, y, w, h } | null——键匹配行的目标柱几何（x/w 与该
+ *   数据柱完全同位同宽，y/h 自基线起算），无匹配行或无有效目标值时为 null；
+ *   轮廓（非实心）呈现属渲染侧职责，本函数只产出几何。
  */
-export function stackedBarsLayout(rows, { width = 640, height = 150, pad = { top: 8, right: 8, bottom: 20, left: 44 } } = {}) {
+export function stackedBarsLayout(rows, { width = 640, height = 150, pad = { top: 8, right: 8, bottom: 20, left: 44 }, target = null } = {}) {
   const list = rows ?? [];
   const innerW = Math.max(10, width - pad.left - pad.right);
   const innerH = Math.max(10, height - pad.top - pad.bottom);
@@ -69,7 +76,10 @@ export function stackedBarsLayout(rows, { width = 640, height = 150, pad = { top
       (usage.outputTokens ?? 0)
     );
   });
-  const scale = niceScale(Math.max(1, ...totals));
+  /* 目标值有效性门闩：非有限数/非正数一律视为「未设置」（缺席）——计划值契约
+     与 plan-store 一致：未设置 ≠ 0。 */
+  const targetValue = target !== null && Number.isFinite(target?.value) && target.value > 0 ? target.value : null;
+  const scale = niceScale(Math.max(1, ...totals, targetValue ?? 0));
   const yMax = scale.yMax;
   const step = innerW / Math.max(1, list.length);
   const barW = Math.max(2, Math.min(28, step * 0.6));
@@ -96,6 +106,18 @@ export function stackedBarsLayout(rows, { width = 640, height = 150, pad = { top
   });
   /* Y 轴整刻度（用户反馈 #2）：由 niceScale 生成（1/2/5×10^k 步进，含 0）。 */
   const ticks = scale.tickValues.map((value) => ({ value, y: yOf(value) }));
+  /* 目标柱几何（键匹配唯一行；行键 turn|day 双形兼容——总览趋势行经
+     dualAxisTrendLayout 归一为 turn，直接调用方传 turn）：与数据柱同 x/w，
+     y/h 自基线起算，h 下限 1px 保证极小目标值仍可悬停读取。 */
+  let targetBar = null;
+  if (targetValue !== null) {
+    const index = list.findIndex((row) => (row?.turn ?? row?.day) === target.key);
+    if (index >= 0) {
+      const bar = bars[index];
+      const y = yOf(targetValue);
+      targetBar = { key: target.key, value: targetValue, x: bar.x, y, w: bar.w, h: Math.max(1, pad.top + innerH - y) };
+    }
+  }
   /* 轮次刻度稀疏化（design D6 / 任务 4.4）：每 ⌈n/8⌉ 取一，轴标至多 8 个，
      避免长窗口下刻度拥挤；首刻度恒保留。 */
   const stride = Math.max(1, Math.ceil(list.length / 8));
@@ -108,7 +130,85 @@ export function stackedBarsLayout(rows, { width = 640, height = 150, pad = { top
       y: height - 6
     });
   }
-  return { bars, yMax, yStep: scale.step, ticks, xLabels, stride, pad, width, height };
+  return { bars, yMax, yStep: scale.step, ticks, xLabels, stride, pad, width, height, targetBar };
+}
+
+/**
+ * 双轴组合趋势布局（总览页签合并卡）：token 四桶堆叠柱（左轴）+ 费用折线（右轴），
+ * 共享同一 x 桶轴。费用点按桶键对齐到柱位中心（取代独立 lineLayout 的按点序号
+ * 等距——缺数据日不再产生时间失真）；无已计价费用的桶折线断开（分段路径，
+ * 不做跨洞插值）。柱状几何与左轴刻度完全复用 stackedBarsLayout（段间留隙、
+ * 刻度稀疏化语义不变）；右轴金额走独立 niceScale（minStep 0），只出刻度文本
+ * 不出网格（网格沿用左轴一组，避免双网格打架）。
+ * @param rows - 趋势行 [{day, buckets, source}]（"older" 为最左桶，与柱状图同源）；
+ *   亦兼容会话页轮行 [{turn, usage}]（rework-kpi-charts D4：行键 day ?? turn 归一，
+ *   费用点/柱位对齐与断线语义两形一致）。
+ * @param costByKey - Map<桶键, cost>（键必须取自 rows 的行键 day|turn，仅这些键会被读取，
+ *   其余键一律忽略——调用方不得把超窗费用合计折入既有桶，否则其合计会撑爆
+ *   右轴刻度，令窗口内逐日点全部贴底）。
+ * @param options - width/height/pad 同 stackedBarsLayout；pad.right 默认 64，
+ *   为右轴金额刻度文本留位。options.target 透传 stackedBarsLayout（今日目标参考
+ *   柱 {key, value}，key 须为 rows 的行键 day|turn；缺省 null 不产出目标柱，
+ *   总览以外调用方零回归）。
+ * @returns stackedBarsLayout 全量产物 + cost 域：{ costDots: [{key,day,turn,cost,x,y}]
+ *   （key = day ?? turn 归一行键，供渲染侧 React key；day/turn 保留供悬停 title）,
+ *   costPaths: string[]（每连续段一条 M..L.. 路径）, costTicks, costYMax, hasCost }。
+ *   无任何已计价费用时 hasCost=false 且 cost 域为空（调用方退化为纯柱状图）。
+ */
+export function dualAxisTrendLayout(rows, costByKey, { width = 640, height = 150, pad = { top: 8, right: 64, bottom: 20, left: 44 }, target = null } = {}) {
+  /* 入参形状归一（回归修复）：总览趋势行是 {day, buckets, source}，而
+     stackedBarsLayout 消费 {turn, usage}——此前直接透传导致柱高全零（页面只剩
+     折线）。day/turn 与 buckets/usage 双兼容归一后，柱状几何与原四桶图一致。 */
+  const list = rows ?? [];
+  const base = stackedBarsLayout(
+    list.map((row) => ({ turn: row?.turn ?? row?.day, usage: row?.usage ?? row?.buckets ?? {} })),
+    { width, height, pad, target }
+  );
+  const costs = costByKey instanceof Map ? costByKey : new Map(Object.entries(costByKey ?? {}));
+  /* 费用路径行键归一（rework-kpi-charts D4 评审修正）：柱路径已双兼容
+     （turn: row?.turn ?? row?.day），费用路径此前只认 row?.day——会话行（只有
+     turn）恒取 undefined，费用线整条不渲染。rowKey = day ?? turn 与柱键同源。 */
+  const rowKeyOf = (row) => row?.day ?? row?.turn;
+  const present = list.map((row) => {
+    const cost = costs.get(rowKeyOf(row));
+    return Number.isFinite(cost) && cost > 0 ? cost : null;
+  });
+  const hasCost = present.some((cost) => cost !== null);
+  if (!hasCost) return { ...base, costDots: [], costPaths: [], costTicks: [], costYMax: 0, costYStep: 0, hasCost: false };
+  const innerH = Math.max(10, height - pad.top - pad.bottom);
+  const scale = niceScale(Math.max(...present.filter((cost) => cost !== null)), { minStep: 0 });
+  const yOf = (cost) => pad.top + innerH - (cost / scale.yMax) * innerH;
+  const coords = [];
+  const costDots = [];
+  list.forEach((row, index) => {
+    const cost = present[index];
+    if (cost === null) {
+      coords.push(null);
+      return;
+    }
+    const bar = base.bars[index];
+    const coord = { x: bar.x + bar.w / 2, y: yOf(cost) };
+    coords.push(coord);
+    /* key = 归一行键（day 形 → 日键 / turn 形 → 轮号）：供渲染侧作 React key；
+       day / turn 原样保留（总览悬停 title 用 day，会话页用 turn 出「#N」）。 */
+    costDots.push({ key: rowKeyOf(row), day: row?.day, turn: row?.turn, cost, x: coord.x, y: coord.y });
+  });
+  /* 分段路径：连续有费用桶连成一段，断桶处断开。 */
+  const costPaths = [];
+  let run = [];
+  const flushRun = () => {
+    if (run.length > 0) {
+      costPaths.push(run.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" "));
+      run = [];
+    }
+  };
+  for (const coord of coords) {
+    if (coord) run.push(coord);
+    else flushRun();
+  }
+  flushRun();
+  const costTicks = scale.tickValues.map((cost) => ({ cost, y: yOf(cost) }));
+  return { ...base, costDots, costPaths, costTicks, costYMax: scale.yMax, costYStep: scale.step, hasCost: true };
 }
 
 /**

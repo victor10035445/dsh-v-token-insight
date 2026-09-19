@@ -1,8 +1,8 @@
 /**
  * dsh-v-token-insight — 会话窗口节点 → 每轮聚合（纯函数、零依赖，node 可单测）。
  *
- * 输入：客户端会话快照的 legacy 节点（dsh-client-runtime conversation.d.ts 的
- * ConversationNode，经 useSession((s) => s.chat.legacy.nodes) 取得）：
+ * 输入：客户端 chat 视图快照的 legacy 节点（ui-conversation conversation.d.ts 的
+ * ConversationNode，DSH 0.1.2-rc.1 起经 useChat((s) => s.legacy.nodes) 取得；
  *  - UserMessageNode / SteeringMessageNode：轮标题来源（content 文本截断）；
  *    注意二者没有 turn 字段，轮归属靠「其后首个 assistant 节点」推断；
  *  - AssistantMessageNode：turn/step、usage（TokenUsage 形状，可能缺省——
@@ -210,7 +210,8 @@ export function sumUsage(rows) {
  * 是必填的 {provider, model}（"Required source of an assistant message
  * produced by a routed model"），但 ui-conversation 构造 legacy
  * AssistantMessageNode 时未拷贝该字段——窗口节点上拿不到模型。trajectory
- * 视图（views.get("trajectory")）自己的 fold 会填：其 requests[] 按
+ * 视图（useTrajectory((s) => s)，0.1.2-rc.1 起取代 views.get("trajectory")）
+ * 自己的 fold 会填：其 requests[] 按
  * (turn, step) 携带 provenance {provider, model}、requestConfig、usage、
  * status。本函数把该清单按 (turn, step) join 进折叠行：
  *  - 只补缺（节点自身 provenance 优先——将来宿主版本若填了则以节点为准）；
@@ -218,7 +219,7 @@ export function sumUsage(rows) {
  *    消息的那次）；
  *  - models 列表按补全后的步骤重算（保持首次出现顺序）。
  * @param rows - foldTurns 产物。
- * @param requests - views.get("trajectory")?.requests（RequestView[]；可缺省）。
+ * @param requests - useTrajectory((s) => s)?.requests（RequestView[]；可缺省）。
  * @returns 新的行数组（不改传入值）。
  */
 export function joinRequestInsights(rows, requests) {
@@ -262,6 +263,104 @@ export function joinRequestInsights(rows, requests) {
   return anyTouched ? next : rows;
 }
 
+/* ------------------------------------------------------------------ *
+ * 共享折叠产物（perf-hot-path-optimization D1/R1）
+ *
+ * 同一会话同一已加载窗口的 foldTurns + joinRequestInsights 结果由全部消费点
+ * （轮尾 chip × N 与「会话Token统计」页签）共享一次计算；产物内置轮定位索引
+ * （messageId→turn / turn→row），chip 的轮定位查找为 O(1)——单次会话快照
+ * 更新的总工作量与窗口节点数同阶，不再与「chip 数 × 窗口节点数」同阶。
+ *
+ * 缓存 = 双层 WeakMap（窗口 nodes 数组 → fold 产物 → join 产物）+ 内容签名
+ * （length + 首节点引用 + 末节点引用 + 末节点 turn:step）：宿主复用同一数组
+ * 对象原地变异（追加 / 前插 / 末节点替换）时签名失配 → 立即重算并覆盖缓存；
+ * 旧窗口数组随 GC 自动淘汰，无需容量管理。签名未覆盖的残余风险（早期节点
+ * 原地变异且数组结构完全不变）由下一次窗口身份变化自愈（design Risks 节）。
+ *
+ * 选项约定：Shared 变体固定默认 titleMaxLength=60（当前全部调用点的取值）；
+ * options 不进缓存键，需要非默认截断的调用方必须走 foldTurns（禁用共享缓存），
+ * 杜绝错误命中。
+ */
+
+const sharedFoldCache = new WeakMap(); /* nodes 数组 → { sig, artifact } */
+const sharedJoinCache = new WeakMap(); /* fold 产物 → { sig, joined } */
+
+function windowSignatureOf(nodes) {
+  const length = nodes.length;
+  const first = length > 0 ? nodes[0] : void 0;
+  const last = length > 0 ? nodes[length - 1] : void 0;
+  const lastKey =
+    last !== void 0 && last !== null && typeof last === "object"
+      ? `${last.kind ?? ""}|${last.turn ?? ""}|${last.step ?? ""}`
+      : "";
+  return { length, first, last, lastKey };
+}
+
+function signatureMatches(sig, next) {
+  return sig.length === next.length && sig.first === next.first && sig.last === next.last && sig.lastKey === next.lastKey;
+}
+
+/** fold 产物 + 轮定位索引（messageId→turn 与 turn→row；fold 单遍产物顺带构建）。 */
+function sharedArtifactOf(rows) {
+  const turnByMessageId = new Map();
+  const rowByTurn = new Map();
+  for (const row of rows) {
+    if (!rowByTurn.has(row.turn)) rowByTurn.set(row.turn, row);
+    for (const step of row.steps ?? []) {
+      /* 同 messageId 重复映射同 turn；取首个命中，与既有线性反查一致。 */
+      if (step.messageId != null && !turnByMessageId.has(step.messageId)) {
+        turnByMessageId.set(step.messageId, row.turn);
+      }
+    }
+  }
+  return { rows, turnByMessageId, rowByTurn };
+}
+
+/**
+ * foldTurns 的共享产物入口：同窗口（数组身份 + 内容签名）只折叠一次。
+ * @param nodes - useSession 快照的 legacy 节点数组。
+ * @returns { rows, turnByMessageId, rowByTurn }（产物引用可跨消费点比较以验证缓存命中）。
+ */
+export function foldTurnsShared(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return sharedArtifactOf([]);
+  }
+  const cached = sharedFoldCache.get(nodes);
+  const sig = windowSignatureOf(nodes);
+  if (cached !== void 0 && signatureMatches(cached.sig, sig)) {
+    return cached.artifact;
+  }
+  const artifact = sharedArtifactOf(foldTurns(nodes));
+  sharedFoldCache.set(nodes, { sig, artifact });
+  return artifact;
+}
+
+/**
+ * joinRequestInsights 的共享产物入口：输入 foldTurnsShared 产物（或任意行数组，
+ * 后者不占共享缓存），同一 fold 产物 + 同一 requests（引用 + 首末守卫）只 join 一次。
+ * @returns { rows, turnByMessageId, rowByTurn }；join 未触碰任何行时 rows 为
+ *   fold 产物原引用（与 joinRequestInsights「无命中返回原引用」语义一致）。
+ */
+export function joinRequestInsightsShared(artifact, requests) {
+  const base =
+    artifact !== null && typeof artifact === "object" && Array.isArray(artifact.rows)
+      ? artifact
+      : sharedArtifactOf(Array.isArray(artifact) ? artifact : []);
+  if (!Array.isArray(requests) || requests.length === 0) return base;
+  const sig = { ref: requests, length: requests.length, first: requests[0], last: requests[requests.length - 1] };
+  const cached = sharedJoinCache.get(base);
+  if (cached !== void 0 && cached.sig.ref === sig.ref && cached.sig.length === sig.length && cached.sig.first === sig.first && cached.sig.last === sig.last) {
+    return cached.joined;
+  }
+  const joinedRows = joinRequestInsights(base.rows, requests);
+  const joined =
+    joinedRows === base.rows
+      ? base
+      : { rows: joinedRows, turnByMessageId: base.turnByMessageId, rowByTurn: sharedArtifactOf(joinedRows).rowByTurn };
+  sharedJoinCache.set(base, { sig, joined });
+  return joined;
+}
+
 /**
  * 计费输入 = 三桶输入之和（桶互斥，与官方 StatsLine 的口径一致）。
  * 双形状兼容：窗口节点 usage 用 `inputTokens`，宿主投影 tokenUsage 用
@@ -288,6 +387,31 @@ export function formatTokens(count) {
 }
 
 /**
+ * 百万 Token 缩写（rework-kpi-charts D1，总览「输入/输出（M）」合并卡）：
+ *  - ≥ 1M 四舍五入取整（115.1M → "115"，单位语义由标题「（M）」承载）；
+ *  - < 1M 保留一位小数并剥尾零（0.98M → "1"、0.2M → "0.2"、0 → "0"）。
+ * 数值本身不带单位后缀；精确值（formatTokens）由调用方收进悬停 tips。
+ */
+export function formatMillions(count) {
+  const n = count ?? 0;
+  if (n >= 1_000_000) return String(Math.round(n / 1_000_000));
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, "");
+}
+
+/**
+ * 今日DPS 显示（rework-kpi-charts D2）：今日消耗 ÷ 自当地零点的已过秒数。
+ *  - elapsedMs < 60_000 → "—"（跨零点一个刷新节拍内，分母尚不可用）；
+ *  - 比值 < 1（含今日无消耗）→ "<1"；
+ *  - 否则四舍五入整数（158,400 token / 3,600s → "44"）。
+ */
+export function formatTodayDps(todayTokens, elapsedMs) {
+  if (!(elapsedMs >= 60_000)) return "—";
+  const ratio = (todayTokens ?? 0) / (elapsedMs / 1000);
+  if (ratio < 1) return "<1";
+  return String(Math.round(ratio));
+}
+
+/**
  * 离线折叠 session.history 事件页 → 账本沉淀行（深度补全用，不打开会话）。
  *
  * usage 双载体口径（与宿主 token-meter 一致，dsh-client-connection usageSampleOf
@@ -300,8 +424,11 @@ export function formatTokens(count) {
  * （wire 必填）；仅出现 chunk-usage 而无 message 的步（中断）模型未知 → 空串。
  * 请求开始时刻：`step/start` 事件时刻（时段折扣的账单口径，缺失回退事件时刻）。
  *
- * @param pages - 每页 session.history 响应的 events 数组（[{event} | event]），
- *   按拉取顺序（新→旧或旧→新均可；函数内部按 (seq) 排序后重放）。
+ * @param pages - 每页会话历史事件数组（[{event} | event]；0.1.2-rc.1 事件窗口
+ *   条目为 {type:"event", event} / {type:"chunks", event: chunkrow/*}，后者为
+ *   压缩 Assistant 增量行、无逐事件语义，跳过——usage 权威载体 assistant/message
+ *   与 step/start 不受影响），按拉取顺序（新→旧或旧→新均可；函数内部按 (seq)
+ *   排序后重放）。
  * @returns { rows, fromSeq, toSeq }：rows 与 foldTurns 行同形（upsert 可直接吃），
  *   仅含 usage 非空步；fromSeq/toSeq 为本批事件 seq 区间（无事件为 null）。
  */
@@ -309,6 +436,7 @@ export function foldHistoryEvents(pages) {
   const events = [];
   for (const page of pages ?? []) {
     for (const item of page ?? []) {
+      if (item?.type === "chunks") continue; /* 压缩 Assistant 增量行（chunkrow/*）：无逐事件语义 */
       const event = item?.event ?? item;
       if (event && typeof event.type === "string" && Number.isFinite(event.seq)) events.push(event);
     }

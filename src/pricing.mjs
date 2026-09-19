@@ -19,7 +19,8 @@
  *  - 计费必须逐步（per-step）：同一会话内档位（长会话后半段跨 128k 线）、
  *    时段、模型都可能变化，绝不能「总量 × 单价」。
  *  - 语义约定：
- *      · 无匹配条目 → 调用方得到 null，UI 不显示费用（不猜价）；
+ *      · 无匹配条目 → 该步不计费（未定价步不计入任何费用合计，不猜价）；
+ *        轮/会话费用 = 已定价步之和，未定价原因如实披露（fix-step-level-cost）；
  *      · 费用每次按当前价目表即时计算、不落库——价目表修改后历史轮自然
  *        重算，代价是「历史费用随价目漂移」，UI 以「折算值仅供参考」表达；
  *      · 币种跟条目走；v0 全局一个显示币种（UI 层约束），不做自动汇率。
@@ -32,15 +33,27 @@ export const UNIT = 1_000_000;
 export const BUCKETS = ["input", "cacheRead", "cacheWrite", "output"];
 
 /**
- * 预置默认价目（底稿：2026-09-02 三厂商官网刊例价，用户可在设置中维护）。
+ * 预置默认价目（底稿：2026-09-16 三厂商官网刊例价，用户可在设置中维护）。
  * cacheWrite=0 表示该厂商不单独收缓存写入费；档位/时段/折扣字段缺省按 1/无 处理。
  *
  * 口径说明（与官网价的对应关系，调价时请对照官网复核）：
- *  - DeepSeek：V4 系列分高峰/空闲两档，高峰 = 北京时间周一至五 9:00–12:00、
- *    14:00–18:00，空闲为高峰半价。defaultTier 填空闲价、高峰用 timeWindows ×2
- *    还原；DSH 时段窗口无星期维度，周末白天会被误按高峰计（宁可高估方向）。
- *    缓存命中单独计价、无缓存写入费。deepseek-chat / deepseek-reasoner 已于
- *    2026-07-24 停用（曾指向 V4-Flash），保留旧价仅为折算停用前的历史步骤。
+ *  - DeepSeek（2026-09-16 对照
+ *    https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ 更新）：
+ *    V4 系列分高峰/空闲两档，高峰 = 北京时间周一至五 9:00–12:00、14:00–18:00，
+ *    空闲为高峰半价。defaultTier 填空闲价、高峰用 timeWindows ×2 还原；
+ *    DSH 时段窗口无星期维度，周末白天会被误按高峰计（宁可高估方向）。
+ *    缓存命中单独计价、无缓存写入费。
+ *    · 现行模型名 `deepseek-flash`（版本 DeepSeek-V4.1-Flash）：空闲
+ *      0.02 / 1 / 4，高峰 0.04 / 2 / 8。
+ *    · `deepseek-v4-pro`（版本 DeepSeek-V4-Pro-0813）本次单价未变：空闲
+ *      0.15 / 4.5 / 13.5，高峰 0.30 / 9.0 / 27.0；官方公告 2026-09-14 后继续
+ *      供服且计费方式不变。
+ *    · 旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 官方仍接受
+ *      调用，但对应模型已下线，请求由 DeepSeek-V4.1-Flash 提供服务并按 Flash
+ *      价计费——故与 `deepseek-flash` 同价并列保留（勿删旧名：历史步骤仍需
+ *      按其模型名折算，且实测网关仍可能回传旧名）。
+ *    · deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用（曾指向
+ *      V4-Flash），保留旧价仅为折算停用前的历史步骤。
  *  - Kimi/月之暗面（platform.moonshot.cn）：kimi-k3 官方刊例价 缓存命中 2 /
  *    未命中 20 / 输出 100，无缓存写入费；前提是接入网关按官方刊例计费。
  *  - 千问/百炼：cacheRead 取隐式缓存命中价（约输入 20%）。例外：qwen3.8 系官方
@@ -49,11 +62,14 @@ export const BUCKETS = ["input", "cacheRead", "cacheWrite", "output"];
  *    显式缓存（cache_control）创建按输入 125%，用到时手工改 cacheWrite。
  *    qwen-plus / qwen-turbo 思考模式输出单价更高（8 / 3 元），表中取非思考价。
  *    阶梯按单次请求输入分档：128K=131072、256K=262144。
- *  - 智谱/bigmodel：缓存命中单独定价（约为输入 25%）；缓存存储按「百万
- *    token·小时」计费且旗舰款当前限时免费——四桶模型表达不了按小时存储费，
- *    cacheWrite 填 0。glm-5.3-flash 为 5 折限时价（至 2026-09-09，之后恢复
- *    0.8 / 0.23 / 2.8）；glm-4.7 的 ≤32K 档还按输出长度再分档，DSH 无此维度，
- *    取其中高档 3 / 0.6 / 14。
+ *  - 智谱/bigmodel（2026-09-16 对照
+ *    https://docs.bigmodel.cn/cn/guide/start/pricing 复核）：缓存命中单独定价
+ *    （约为输入 25%）；缓存存储按「百万 token·小时」计费且当前限时免费——
+ *    四桶模型表达不了按小时存储费，cacheWrite 填 0。
+ *    glm-5.3-flash 的 5 折限时价已于 2026-09-09 到期，现按刊例价
+ *    0.8 / 0.23 / 2.8 收录（原 0.4 / 0.115 / 1.4 为过期促销价，已作废）。
+ *    glm-4.7 的 ≤32K 档还按输出长度再分档（≤0.2K 输出 2/0.4/8），DSH 无
+ *    输出长度维度，取该区间中高档 3 / 0.6 / 14。
  * @type {Array<object>}
  */
 export const DEFAULT_PRICE_TABLE = [
@@ -80,11 +96,26 @@ export const DEFAULT_PRICE_TABLE = [
   },
   /* —— DeepSeek V4 现行价（defaultTier=空闲档，高峰窗口 ×2）—— */
   {
+    model: "deepseek-flash",
+    provider: "",
+    currency: "CNY",
+    unit: "MTok",
+    /* 空闲档 0.02 / 1 / 4（缓存命中 / 未命中 / 输出），高峰 ×2。 */
+    defaultTier: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+    tiers: [],
+    timeWindows: [
+      { from: "09:00", to: "12:00", multiplier: 2 },
+      { from: "14:00", to: "18:00", multiplier: 2 }
+    ],
+    discount: 1
+  },
+  {
+    /* 旧模型名：官方仍接受调用，实际由 V4.1-Flash 供服、按 Flash 价计费。 */
     model: "deepseek-v4-flash",
     provider: "",
     currency: "CNY",
     unit: "MTok",
-    defaultTier: { input: 1.5, cacheRead: 0.05, cacheWrite: 0, output: 4.5 },
+    defaultTier: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
     tiers: [],
     timeWindows: [
       { from: "09:00", to: "12:00", multiplier: 2 },
@@ -97,6 +128,7 @@ export const DEFAULT_PRICE_TABLE = [
     provider: "",
     currency: "CNY",
     unit: "MTok",
+    /* 本次调价未变：空闲档 0.15 / 4.5 / 13.5，高峰 ×2 = 0.30 / 9.0 / 27.0。 */
     defaultTier: { input: 4.5, cacheRead: 0.15, cacheWrite: 0, output: 13.5 },
     tiers: [],
     timeWindows: [
@@ -106,12 +138,12 @@ export const DEFAULT_PRICE_TABLE = [
     discount: 1
   },
   {
+    /* 旧模型名：同 v4-flash，由 V4.1-Flash 供服并按 Flash 价计费。 */
     model: "deepseek-v4-flash-vision-exp",
     provider: "",
     currency: "CNY",
     unit: "MTok",
-    /* 官方价目与 v4-flash 同价（刊例一致）。 */
-    defaultTier: { input: 1.5, cacheRead: 0.05, cacheWrite: 0, output: 4.5 },
+    defaultTier: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
     tiers: [],
     timeWindows: [
       { from: "09:00", to: "12:00", multiplier: 2 },
@@ -204,8 +236,8 @@ export const DEFAULT_PRICE_TABLE = [
     provider: "",
     currency: "CNY",
     unit: "MTok",
-    /* 5 折限时价至 2026-09-09；到期后改回 { 0.8, 0.23, 0, 2.8 }。 */
-    defaultTier: { input: 0.4, cacheRead: 0.115, cacheWrite: 0, output: 1.4 },
+    /* 5 折限时价（0.4/0.115/1.4）已于 2026-09-09 到期，恢复刊例价。 */
+    defaultTier: { input: 0.8, cacheRead: 0.23, cacheWrite: 0, output: 2.8 },
     tiers: [],
     timeWindows: [],
     discount: 1
@@ -439,6 +471,22 @@ export function formatMoney(cost, currency = "CNY") {
   return symbol + (Math.abs(cost) >= 1 ? cost.toFixed(2) : cost.toFixed(4));
 }
 
+/**
+ * 双轴图右轴金额刻度（rework-kpi-charts D3，自 client.jsx 迁入以供 node 单测）：
+ *  - cost ≥ 1（取整后）：整数化并剥 ".00" 尾缀（¥50 而非 ¥50.00，既有行为）；
+ *  - 0 < cost < 1：至多 4 位小数剥尾零（0.3 → "¥0.3"、0.05 → "¥0.05"）——
+ *    修复既有 bug：先取整后过 formatMoney 小额 4 位小数路径，尾缀剥离正则
+ *    匹配不上，轴上悬 "¥0.0000"（MUST NOT 取整坍缩为 0）；
+ *  - cost = 0 → "¥0"（调用侧零刻度不渲染文本，兜底形状完整）。
+ */
+export function formatAxisMoney(cost, currency = "CNY") {
+  const symbol = CURRENCY_SYMBOL[currency] ?? "";
+  if (!Number.isFinite(cost)) return formatMoney(cost, currency);
+  if (Math.round(cost) >= 1) return formatMoney(Math.round(cost), currency).replace(/\.00$/, "");
+  if (cost > 0) return symbol + cost.toFixed(4).replace(/\.?0+$/, "");
+  return symbol + "0";
+}
+
 /** v0 显示币种：价目表首个条目的币种（编辑器落地后由显式设置取代）。 */
 export function displayCurrencyOf(table) {
   return table?.[0]?.currency ?? "CNY";
@@ -521,23 +569,26 @@ export function validatePriceTable(value) {
 
 const UNPRICED_NO_ENTRY = "无价目";
 const UNPRICED_CURRENCY = (currency) => `币种不符(${currency})`;
+/** 账本条目模型名缺失（不可归因）时的展示名（fix-ledger-attribution）。 */
+export const UNKNOWN_MODEL_LABEL = "未知模型";
 
 /**
  * 给折叠行逐步计价（per-step；累计分档键 = 窗口内该模型此前步的
  * 输入+输出累计，「批发档」近似语义，见头注）。
  *
- * 严格语义（任一命中即该轮 cost = null，unmatched 列出模型与原因）：
- *  - 步模型无匹配条目 →「无价目」（不猜价）；
- *  - 步命中条目币种 ≠ 显示币种 →「币种不符」——绝不跨币种求和、不自动换汇
- *    （token-pricing 规格「币种一致性与显示币种」）。
- * 时段折扣时间口径：优先该步请求开始时刻（startTime = timing.stepStartTime），
- * 缺失回退 assistant/message 落盘时刻。
- * usage 缺省步（中断/失败）不计费（token-pricing 规格「逐步计费」）。
+ * 步级语义（fix-step-level-cost：轮/会话费用 = 已定价步之和）：
+ *  - 步模型无匹配条目 →「无价目」；步命中条目币种 ≠ 显示币种 →「币种不符」
+ *    ——未定价步 MUST NOT 计入费用合计（不猜价、绝不跨币种求和、不自动换汇），
+ *    但已定价步照常计入轮/会话合计，未定价原因在 unmatched 如实披露；
+ *  - 行费用 = 该轮已定价步之和；整轮无任何已定价步时 cost = null（显示「未定价」）；
+ *  - 时段折扣时间口径：优先该步请求开始时刻（startTime = timing.stepStartTime），
+ *    缺失回退 assistant/message 落盘时刻；
+ *  - usage 缺省步（中断/失败）不计费（token-pricing 规格「逐步计费」）。
  *
  * @param rows - foldTurns 产物（升序）。
  * @param table - 价目表。
- * @returns 与 rows 平行的行数组，附 { cost|null, currency, currencyMixed|null,
- *   unmatched: ["模型:原因"], stepPrices: [ {cost|null, currency, tier, timeFactor, multiplier}|null ] }。
+ * @returns 与 rows 平行的行数组，附 { cost|null, currency, unmatched: ["模型:原因"],
+ *   stepPrices: [ {cost|null, currency, tier, timeFactor, multiplier}|null ] }。
  *   stepPrices 与 row.steps 平行：无 usage 步为 null；已定价步含命中档与折扣。
  */
 export function priceTurnRows(rows, table) {
@@ -545,19 +596,19 @@ export function priceTurnRows(rows, table) {
   const cumulative = new Map();
   return (rows ?? []).map((row) => {
     let cost = 0;
-    let allPriced = true;
+    let pricedCount = 0;
+    let usageSteps = 0;
     const unmatched = new Map();
     const stepPrices = row.steps.map((step) => {
       if (!step.usage) return null;
+      usageSteps += 1;
       const entry = matchPriceEntry(table, step.model ?? "", step.provider ?? "");
       if (!entry) {
-        allPriced = false;
-        if (step.model) unmatched.set(step.model, UNPRICED_NO_ENTRY);
+        unmatched.set(step.model || UNKNOWN_MODEL_LABEL, UNPRICED_NO_ENTRY);
         return null;
       }
       if (entry.currency !== displayCurrency) {
-        allPriced = false;
-        if (step.model) unmatched.set(step.model, UNPRICED_CURRENCY(entry.currency));
+        unmatched.set(step.model || UNKNOWN_MODEL_LABEL, UNPRICED_CURRENCY(entry.currency));
         return null;
       }
       const key = step.model ?? "";
@@ -567,12 +618,14 @@ export function priceTurnRows(rows, table) {
         time: step.startTime ?? step.time,
         cumulativeTokens: total
       });
-      if (result) cost += result.cost;
+      cost += result.cost;
+      pricedCount += 1;
       return result;
     });
     return {
       ...row,
-      cost: allPriced ? cost : null,
+      /* 无步 / 仅缺 usage 步 → 0（无未定价问题）；有 usage 步但全未定价 → null（显示「未定价」） */
+      cost: usageSteps === 0 ? 0 : pricedCount > 0 ? cost : null,
       currency: displayCurrency,
       unmatched: [...unmatched.entries()].map(([model, reason]) => `${model}:${reason}`),
       stepPrices

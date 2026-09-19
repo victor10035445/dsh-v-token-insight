@@ -37,10 +37,14 @@ export function Card({ title, subtitle, actions, children, className = "" }) {
  * @param meter - 可选迷你占比条插槽（总览页命中率/会话构成，按数值比例填充；
  *   用户反馈 #6：环/圆点示意不可读，改为占比条）。纯装饰，容器 aria-hidden，
  *   数值文本仍是唯一无障碍信息源；缺席不渲染。
+ * @param title - 可选悬停 tips（原生 title）：口径说明收进 tips，不再占副注行
+ *   （用户反馈：会话/费用卡的描述改为 tips）。
+ * @param large - 可选大字号数值档（用户反馈：Token 总消耗/总花费数字加大，
+ *   更好用满卡片空间；data-large 供 CSS 放大 .tsn-kpi-value）。
  */
-export function KpiCard({ label, value, sub, meter }) {
+export function KpiCard({ label, value, sub, meter, title, large }) {
   return (
-    <div className="tsn-kpi">
+    <div className="tsn-kpi" title={title} data-large={large || undefined}>
       <div className="tsn-kpi-label">{label}</div>
       <div className="tsn-kpi-value">{value}</div>
       {meter ? (
