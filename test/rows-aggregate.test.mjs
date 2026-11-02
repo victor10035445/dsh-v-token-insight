@@ -5,6 +5,9 @@
  * 归档数据面缺失守卫、depth 计算；fix-partial-coverage：趋势余量
  * （computeTrendRemainders 截零/全零不入/fork 排除 + aggregateByTime 余量归并、
  * 老化桶重新入柱、「更早」窗口）与一致性断言（趋势合计 ≡ 投影合计 − fork）。
+ * hide-trend-older-bar：chartTrendRows 展示层过滤（older 剔除 / 仅 older 保留 /
+ * 空集 / 无 older 等价）与 aggregateByTime 数据层行为锁定（折叠 unshift 首位、
+ * 全零不入）。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,6 +21,7 @@ import {
   archivedMissingFromList,
   billedIn,
   bucketsOfProjection,
+  chartTrendRows,
   computeTrendRemainders,
   dayKeyOf,
   expandRows,
@@ -675,4 +679,73 @@ test("一致性断言：趋势行合计（含「更早」）≡ 投影合计 −
   /* 颗粒度升档（年，无窗口）恒等依旧成立。 */
   const yearRows = aggregateByTime(expanded, ledgerDaily, coveredIds, { remainders, granularity: "year" });
   assert.equal(yearRows.reduce((sum, item) => sum + item.total, 0), projectionTotal);
+});
+
+/* ---------------------------------------------------------------- *
+ * hide-trend-older-bar：数据层行为锁定（过滤只在展示层，产物不变）
+ * ---------------------------------------------------------------- */
+
+test("aggregateByTime：超窗折叠产出「更早」行并 unshift 首位；「更早」全零不入", () => {
+  const now = Date.now();
+  const today = dayKeyOf(now);
+  const oldDay = dayKeyOf(now - 400 * 86_400_000); /* 必超 30 天窗口 */
+  const expanded = expandRows([row({ id: "a", updatedAt: now })]);
+  const coveredIds = new Set(["a"]); /* 覆盖段按步归日，updatedAt 路径跳过 */
+  const ledgerDaily = new Map([
+    [oldDay, { buckets: bucketRow(1000, 0, 0, 0) }],
+    [today, { buckets: bucketRow(7, 0, 0, 0) }]
+  ]);
+  const rows = aggregateByTime(expanded, ledgerDaily, coveredIds);
+  /* 超窗桶折叠为唯一「更早」行，unshift 到数组首位（渲染为最左柱）。 */
+  assert.deepEqual(rows.map((item) => item.day), ["older", today]);
+  assert.equal(rows[0].source, "ledger");
+  assert.equal(totalTokens(rows[0].buckets), 1000);
+  /* 全零：「更早」合计为零时不产生该行（全零不入规则）。 */
+  const zeroLedger = new Map([
+    [oldDay, { buckets: bucketRow(0, 0, 0, 0) }],
+    [today, { buckets: bucketRow(7, 0, 0, 0) }]
+  ]);
+  const noOlder = aggregateByTime(expanded, zeroLedger, coveredIds);
+  assert.equal(noOlder.some((item) => item.day === "older"), false);
+  assert.deepEqual(noOlder.map((item) => item.day), [today]);
+});
+
+/* ---------------------------------------------------------------- *
+ * hide-trend-older-bar：展示层过滤 chartTrendRows
+ * ---------------------------------------------------------------- */
+
+test("chartTrendRows：含「更早」且窗口内有桶 → 剔除该行、桶序不变、数据层原集不动", () => {
+  const rows = [
+    { day: "older", buckets: bucketRow(999), total: 999, source: "ledger" },
+    { day: "2026-09-01", buckets: bucketRow(10), total: 10, source: "ledger" },
+    { day: "2026-09-02", buckets: bucketRow(20), total: 20, source: "recent" }
+  ];
+  const chartRows = chartTrendRows(rows);
+  assert.deepEqual(chartRows.map((item) => item.day), ["2026-09-01", "2026-09-02"]);
+  assert.equal(chartRows.some((item) => item.day === "older"), false);
+  /* 纯函数：数据层原集（替代表格/双口径判定的输入）不被改动。 */
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].day, "older");
+});
+
+test("chartTrendRows：仅含「更早」行 → 原样返回（保留唯一柱，整图不消失）", () => {
+  const rows = [{ day: "older", buckets: bucketRow(470), total: 470, source: "recent" }];
+  const chartRows = chartTrendRows(rows);
+  assert.equal(chartRows.length, 1);
+  assert.equal(chartRows[0].day, "older");
+  assert.equal(chartRows[0].total, 470);
+});
+
+test("chartTrendRows：空集进出皆空（无任何入桶消耗维持既有空态）", () => {
+  assert.deepEqual(chartTrendRows([]), []);
+  assert.deepEqual(chartTrendRows(null), []);
+  assert.deepEqual(chartTrendRows(void 0), []);
+});
+
+test("chartTrendRows：无「更早」的行集逐值等价返回", () => {
+  const rows = [
+    { day: "2026-09", buckets: bucketRow(10), total: 10, source: "ledger" },
+    { day: "2026-10", buckets: bucketRow(20), total: 20, source: "mixed" }
+  ];
+  assert.deepEqual(chartTrendRows(rows), rows);
 });

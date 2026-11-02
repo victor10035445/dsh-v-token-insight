@@ -404,6 +404,30 @@ export function aggregateByTime(expanded, ledgerDaily, coveredIds, { days = 30, 
 }
 
 /**
+ * 趋势图（chart）行集：展示层剔除「更早」合并桶（hide-trend-older-bar）。
+ *
+ * **仅展示层过滤，不改数据层行为**——`aggregateByTime` 产物（含 `day="older"`
+ * 行）保持原样：替代表格「更早」行（四桶读数 + 超窗费用合计）、双口径徽标判定
+ * 与费用桶键对齐仍消费完整行集。图表不渲染该桶的原因：它把跨度不等距的窗口外
+ * 历史并成一根总量巨大的柱，通常远超窗口内任一时间桶，把左轴 yMax 定死、近期
+ * 柱全部贴底压扁（用户反馈）；费用线此前已因同样原因不画「更早」点。
+ * 规则：
+ *  - 剔除 `day === "older"` 的行（三档颗粒度 day/month/year 统一，桶序不变）；
+ *  - 剔除后为空**且原行集非空**时原样返回——全部消耗在窗外（趋势行集仅含
+ *    「更早」行）时保留该唯一柱承载全部信息，避免整图消失；
+ *  - 空集进出皆空——无任何入桶消耗时不适用保留规则，维持既有空态。
+ * @param rows - aggregateByTime 产物 [{day, buckets, total, source}]。
+ * @returns 供趋势图渲染的行集（窗口内时间桶；边界情形见上）。
+ */
+export function chartTrendRows(rows) {
+  const list = rows ?? [];
+  if (list.length === 0) return list;
+  const filtered = list.filter((row) => row?.day !== "older");
+  /* 仅含「更早」行（全部消耗在窗外）：保留唯一柱，不让图表空态。 */
+  return filtered.length === 0 ? list : filtered;
+}
+
+/**
  * 趋势余量（fix-partial-coverage 1.3，纯函数，node 可单测）：已覆盖会话的
  * 「未按日入柱」余量。余量 = 行投影逐桶 − dailyBucketsBySession（已按日入柱量，
  * aggregateLedgerViews 产物）——基线取已按日入柱而非 coveredBuckets（D2 审阅修订）：

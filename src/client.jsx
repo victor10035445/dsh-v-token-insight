@@ -90,6 +90,7 @@ import {
   aggregateSessions,
   aggregateWorkspaces,
   archivedMissingFromList,
+  chartTrendRows,
   computeTrendRemainders,
   expandRows,
   groupCostByGranularity,
@@ -274,7 +275,7 @@ const zh = {
   "dash.badge.completed": "已完成",
   "dash.empty": "暂无会话数据。",
   "dash.date.older": "更早",
-  "dash.time.caliber": "双口径：账本覆盖段按步发生时刻分桶（老化桶按其聚合日入柱）；未覆盖会话的整桶与已覆盖会话的未覆盖余量均按最近活动（updatedAt）整桶计入，以「按最近活动」徽标区分。颗粒度窗口：按日近 30 天、按月近 12 个月、按年不限，超出窗口的消耗归入「更早」。",
+  "dash.time.caliber": "双口径：账本覆盖段按步发生时刻分桶（老化桶按其聚合日入柱）；未覆盖会话的整桶与已覆盖会话的未覆盖余量均按最近活动（updatedAt）整桶计入，以「按最近活动」徽标区分。颗粒度窗口：按日近 30 天、按月近 12 个月、按年不限；超出窗口的消耗不计入趋势图，完整读数见明细「更早」行。",
   "dash.time.byRecent": "按最近活动",
   "dash.time.granularity": "统计颗粒度",
   "dash.time.g.day": "按日",
@@ -531,7 +532,7 @@ const en = {
   "dash.badge.completed": "Completed",
   "dash.empty": "No session data yet.",
   "dash.date.older": "Older",
-  "dash.time.caliber": "Dual caliber: ledger-covered spans bucket by step time (aged buckets by their aggregate day); whole buckets of uncovered sessions and the uncovered remainder of covered sessions both bucket by last activity (updatedAt), marked by the \"by last activity\" badge. Granularity windows: daily = last 30 days, monthly = last 12 calendar months, yearly = unlimited; usage beyond the window lands in \"Older\".",
+  "dash.time.caliber": "Dual caliber: ledger-covered spans bucket by step time (aged buckets by their aggregate day); whole buckets of uncovered sessions and the uncovered remainder of covered sessions both bucket by last activity (updatedAt), marked by the \"by last activity\" badge. Granularity windows: daily = last 30 days, monthly = last 12 calendar months, yearly = unlimited; usage beyond the window is not plotted in the trend chart — see the \"Older\" row in the detail table for the full reading.",
   "dash.time.byRecent": "by last activity",
   "dash.time.granularity": "Granularity",
   "dash.time.g.day": "Daily",
@@ -3019,6 +3020,12 @@ const TIME_GRANULARITIES = ["day", "month", "year"];
 function OverviewTab({ t, trendRows, trendCostPoints, costCurrency, modelBars, workspaceBars, kpi, anyCovered, granularity = "day", onGranularityChange }) {
   /* 双口径标记在颗粒度行上判定（D2）。 */
   const mixedCaliber = trendRows.some((row) => row.source === "recent");
+  /* 趋势图行集（hide-trend-older-bar）：图表只吃窗口内时间桶——「更早」合并桶
+     通常远超任一窗口桶，会把左轴 yMax 定死、近期柱全部贴底压扁（用户反馈）。
+     过滤只发生在此展示层：trendAlt（替代表格「更早」行四桶 + 超窗金额）、
+     mixedCaliber 与 costByKey 继续消费完整 trendRows——费用点本就不携带 older
+     键（超窗日键在此前即被丢弃并入 olderCost），原样传入即与柱桶域对齐。 */
+  const chartRows = useMemo(() => chartTrendRows(trendRows), [trendRows]);
   /* 目标参考柱（token-stats-plan 消费方，add-monthly-plan D5）：计划页签设置的
      每日/每月计划消耗作为对应颗粒度桶的非实心目标参考柱。规则：
      - 日颗粒度：已设每日计划（plan.daily > 0）且趋势行集含「今天」桶；
@@ -3033,6 +3040,11 @@ function OverviewTab({ t, trendRows, trendCostPoints, costCurrency, modelBars, w
      - 订阅 PLAN_CHANGED_EVENT（usePlanVersion），计划保存/清除即时生效。 */
   const planVersion = usePlanVersion();
   const plan = currentPlan(planVersion);
+  /* 目标柱与「更早」隐藏无冲突（hide-trend-older-bar 不变量）：目标桶键 = 今日日键 /
+     本月月键，恒在窗口内且为最新桶——窗口下限必早于此刻，maxBuckets 截断折叠的是
+     最旧桶，故目标桶 MUST NOT 被折叠入「更早」；存在性判定在此处按 trendRows 判定、
+     图表收到 chartRows，两者恒同真，无需改用 chartRows。隐藏后目标柱仅随新左轴
+     重定标（行为自洽）。若未来放宽窗口/截断语义，此不变量需重查。 */
   const trendTarget = useMemo(() => {
     if (granularity === "day") {
       if (!(plan?.daily > 0)) return null;
@@ -3132,7 +3144,7 @@ function OverviewTab({ t, trendRows, trendCostPoints, costCurrency, modelBars, w
           alt={{ summaryLabel: t("stats.chart.tableAlt"), table: trendAlt }}
         >
           <TrendDualChart
-            rows={trendRows}
+            rows={chartRows}
             costByKey={costByKey}
             currency={costCurrency}
             t={t}
