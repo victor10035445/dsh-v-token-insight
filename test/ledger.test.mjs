@@ -42,7 +42,7 @@ import {
   ledgerTokensForDay
 } from "../src/ledger.mjs";
 import { DEFAULT_PRICE_TABLE, bucketSetCost, stepCost } from "../src/pricing.mjs";
-import { foldHistoryEvents } from "../src/stats-fold.mjs";
+import { foldHistoryEvents, foldTurns, joinRequestInsights } from "../src/stats-fold.mjs";
 import { aggregateByTime, aggregateKpi, computeTrendRemainders, dayKeyOf, expandRows } from "../src/rows-aggregate.mjs";
 
 /** fake storage（可注入故障）。 */
@@ -144,6 +144,47 @@ test("upsertSessionEntries：模型归因后再次沉淀补齐（last-wins，空
   upsertSessionEntries(ledger, "s1", [turnRow(1, [step(0, { model: "glm-5.3-flash", provider: "codemaker" })])], { nowMs: 2 });
   assert.equal(ledger.sessions.s1.entries.length, 1);
   assert.equal(ledger.sessions.s1.entries[0].m, "glm-5.3-flash");
+});
+
+test("账本自愈（fix-trajectory-join-contract）：契约迁移期空模型沉淀 → join 修复后重开页签幂等回填并恢复计价", () => {
+  /* 0.2.x 形状节点：legacy 节点不带 provenance/providerMetadata（运行时未填充）。 */
+  const nodes = [
+    {
+      kind: "assistant",
+      seq: 1,
+      time: 1_700_000_000_000,
+      turn: 1,
+      step: 1,
+      blocks: [],
+      usage: usage(1_000_000, 0, 0, 0)
+    }
+  ];
+  const ledger = emptyLedger();
+  /* ① 迁移期：join 解析不到模型 → 以空模型沉淀（token/时刻照常入账，可被自动修复发现）。 */
+  const rowsBefore = joinRequestInsights(foldTurns(nodes), []);
+  assert.equal(rowsBefore[0].steps[0].model, null);
+  upsertSessionEntries(ledger, "s1", rowsBefore, { nowMs: 1 });
+  assert.equal(ledger.sessions.s1.entries.length, 1);
+  assert.equal(ledger.sessions.s1.entries[0].m, "");
+  assert.equal(ledger.sessions.s1.entries[0].u.inputTokens, 1_000_000);
+  assert.deepEqual(sessionsWithUnattributedEntries(ledger), ["s1"]);
+  const before = priceLedgerSession(ledger, "s1", DEFAULT_PRICE_TABLE);
+  assert.equal(before.cost, null);
+  /* ② 修复后重开页签：0.2.x providerMetadata 到位 → 同键 upsert 回填真实模型，token 不丢。 */
+  const rowsAfter = joinRequestInsights(foldTurns(nodes), [
+    { purpose: "assistant", turn: 1, step: 1, providerMetadata: { provider: "deepseek", model: "deepseek-chat" } }
+  ]);
+  assert.equal(rowsAfter[0].steps[0].model, "deepseek-chat");
+  upsertSessionEntries(ledger, "s1", rowsAfter, { nowMs: 2 });
+  assert.equal(ledger.sessions.s1.entries.length, 1); /* 幂等：同键覆盖不新增 */
+  assert.equal(ledger.sessions.s1.entries[0].m, "deepseek-chat");
+  assert.equal(ledger.sessions.s1.entries[0].p, "deepseek");
+  assert.equal(ledger.sessions.s1.entries[0].u.inputTokens, 1_000_000);
+  assert.deepEqual(sessionsWithUnattributedEntries(ledger), []);
+  /* ③ 总览费用恢复增量计价（deepseek-chat：输入 ¥2/MTok）。 */
+  const after = priceLedgerSession(ledger, "s1", DEFAULT_PRICE_TABLE);
+  assert.equal(after.covered, true);
+  assert.equal(after.cost, 2);
 });
 
 test("sessionsWithUnattributedEntries：检测空模型条目/桶，干净会话不报", () => {

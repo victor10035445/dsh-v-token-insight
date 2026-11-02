@@ -6,8 +6,10 @@
  *  - UserMessageNode / SteeringMessageNode：轮标题来源（content 文本截断）；
  *    注意二者没有 turn 字段，轮归属靠「其后首个 assistant 节点」推断；
  *  - AssistantMessageNode：turn/step、usage（TokenUsage 形状，可能缺省——
- *    中断/失败步不报告）、provenance {provider, model}、time、timing
- *    {stepStartTime, firstTokenTime, completedTime}、requestConfig、interrupted；
+ *    中断/失败步不报告）、模型身份载体（0.1.x `provenance {provider, model}`、
+ *    0.2.x `providerMetadata {provider, model}`——后者类型已声明、当前运行时
+ *    仍未填充）、time、timing {stepStartTime, firstTokenTime, completedTime}、
+ *    requestConfig、interrupted；
  *  - CompactionSummaryNode（kind:"compaction"）：压缩检查点——落盘的检查点
  *    user 消息在此节点（kind 已改写为 compaction，不再是 user），其指令文本
  *    是写给模型的，绝不能被选为轮标题（实装核对：dsh-client-ui-conversation
@@ -95,6 +97,42 @@ function requestConfigOf(node) {
 }
 
 /**
+ * 载体身份解析（fix-trajectory-join-contract，design Decision 1「载体原子性」）：
+ * 模型/路由身份 `{provider, model}` 只能整体取自同一载体，MUST NOT 跨载体拼配
+ * ——`matchPriceEntry` 的 provider 参与路由匹配，混拼会构造出宿主从未真实组合
+ * 过的路由配对（错价隐患）。
+ *
+ * 载体有效性以其中 `model` 为非空字符串为准：`model` 无效（空串/非字符串/缺失）
+ * 的载体整体视为缺席（调用方继续回退）；`model` 有效而 `provider` 无效时取
+ * `(model, null)`（provider 不参与路由过滤 ≈ 匹配任意条目），不为凑齐 provider
+ * 而降级到下一载体的计划模型。
+ * @returns {{ provider: string|null, model: string } | null}
+ */
+function carrierIdentityOf(carrier) {
+  if (typeof carrier !== "object" || carrier === null) return null;
+  const model = carrier.model;
+  if (typeof model !== "string" || model === "") return null;
+  const provider =
+    typeof carrier.provider === "string" && carrier.provider !== "" ? carrier.provider : null;
+  return { provider, model };
+}
+
+/**
+ * 请求级身份载体回退链（跨宿主契约版本，fix-trajectory-join-contract）：
+ *  1. `provenance`——0.1.x 契约（`message.source`，完成请求的最终身份，计价语义优先）；
+ *  2. `providerMetadata`——0.2.x 完成请求的最终身份（有 durable assistant 节点才附加）；
+ *  3. `requestConfig`——0.2.x `request/header` 落盘的计划配置（在途/重试中也有值）。
+ * 每个载体整体参与解析（见 carrierIdentityOf），无效载体跳过继续回退。
+ */
+function requestIdentityOf(request) {
+  return (
+    carrierIdentityOf(request?.provenance) ??
+    carrierIdentityOf(request?.providerMetadata) ??
+    carrierIdentityOf(request?.requestConfig)
+  );
+}
+
+/**
  * 按轮折叠窗口节点。
  *
  * 轮标题取该轮首个非空 user/steering 文本；仅含命令/上下文注入/压缩检查点
@@ -149,7 +187,12 @@ export function foldTurns(nodes, { titleMaxLength = 60 } = {}) {
       rows.set(turn, row);
     }
     row.endTime = node.time;
-    const model = node.provenance?.model ?? null;
+    /* 节点侧身份载体：0.2.x 的 providerMetadata（类型已声明、当前运行时未填充）
+       优先于 0.1.x 的 provenance——宿主未来填充后节点最终身份不被请求级计划
+       配置倒挂（design Decision 5）；按载体原子判有效，0.1.x 行为不变。 */
+    const nodeIdentity =
+      carrierIdentityOf(node.providerMetadata) ?? carrierIdentityOf(node.provenance);
+    const model = nodeIdentity?.model ?? null;
     if (model && !row.models.includes(model)) row.models.push(model);
     const usage = typeof node.usage === "object" && node.usage !== null ? node.usage : null;
     if (usage) {
@@ -167,7 +210,7 @@ export function foldTurns(nodes, { titleMaxLength = 60 } = {}) {
       row.decodeSampled = true;
     }
     row.steps.push({
-      provider: node.provenance?.provider ?? null,
+      provider: nodeIdentity?.provider ?? null,
       model,
       step: node.step,
       messageId: node.messageId ?? null,
@@ -211,12 +254,20 @@ export function sumUsage(rows) {
  * produced by a routed model"），但 ui-conversation 构造 legacy
  * AssistantMessageNode 时未拷贝该字段——窗口节点上拿不到模型。trajectory
  * 视图（useTrajectory((s) => s)，0.1.2-rc.1 起取代 views.get("trajectory")）
- * 自己的 fold 会填：其 requests[] 按
- * (turn, step) 携带 provenance {provider, model}、requestConfig、usage、
- * status。本函数把该清单按 (turn, step) join 进折叠行：
- *  - 只补缺（节点自身 provenance 优先——将来宿主版本若填了则以节点为准）；
+ * 自己的 fold 会填：其 requests[] 按 (turn, step) 携带模型身份载体、
+ * requestConfig、usage、status。
+ *
+ * 契约迁移（fix-trajectory-join-contract，dsh 0.2.1-rc.5）：`RequestView` 的
+ * `provenance` 字段已移除，模型身份改由 `providerMetadata`（完成请求的最终
+ * 身份，仅在有 durable assistant 节点时附加）与 `requestConfig`（request/header
+ * 落盘的计划配置）承载。本函数按载体回退链解析（见 requestIdentityOf），
+ * 保证跨 0.1.x/0.2.x 两种形状都能产出可计价模型名。
+ *
+ * 语义不变：
+ *  - 只补缺（节点侧已解析的身份——`node.providerMetadata`/`node.provenance`——优先）；
  *  - 同 (turn, step) 多条请求（重试）时取最后一条（最终尝试 = 产出最终
  *    消息的那次）；
+ *  - 无命中行返回原行引用、整表未触碰时返回原数组引用（下游 memo 不失效）；
  *  - models 列表按补全后的步骤重算（保持首次出现顺序）。
  * @param rows - foldTurns 产物。
  * @param requests - useTrajectory((s) => s)?.requests（RequestView[]；可缺省）。
@@ -229,7 +280,8 @@ export function joinRequestInsights(rows, requests) {
   for (const request of requests) {
     if (!request || request.purpose !== "assistant") continue;
     if (typeof request.turn !== "number" || typeof request.step !== "number") continue;
-    /* last-wins：重试链的最终尝试才有 provenance/结果。 */
+    /* last-wins：重试链取最终尝试（0.2.x 下重试内嵌于单条请求，providerMetadata
+       只出现在有 durable 消息的终值请求上，与该语义天然一致）。 */
     byKey.set(`${request.turn}:${request.step}`, request);
   }
   if (byKey.size === 0) return rows;
@@ -239,8 +291,10 @@ export function joinRequestInsights(rows, requests) {
     const steps = row.steps.map((step) => {
       const request = byKey.get(`${row.turn}:${step.step}`);
       if (!request) return step;
-      const provider = step.provider ?? request.provenance?.provider ?? null;
-      const model = step.model ?? request.provenance?.model ?? null;
+      /* 请求级身份按载体原子回退；节点侧已有值优先（fill-only-missing）。 */
+      const identity = requestIdentityOf(request);
+      const provider = step.provider ?? identity?.provider ?? null;
+      const model = step.model ?? identity?.model ?? null;
       const requestConfig =
         step.requestConfig ??
         (typeof request.requestConfig === "object" && request.requestConfig !== null

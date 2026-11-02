@@ -322,6 +322,204 @@ test("requests 缺省/空/仅 compaction 时不改行（引用相等）；忽略
 });
 
 /* ---------------------------------------------------------------- *
+ * 宿主契约 fixture（fix-trajectory-join-contract）
+ * 0.1.x：仅 `provenance`；0.2.x：`providerMetadata`/`requestConfig`、无 `provenance`。
+ * ---------------------------------------------------------------- */
+
+test("0.2.x 契约：请求仅 requestConfig 承载身份 → join 后模型可计价（费用非 null）", () => {
+  const rows = foldTurns([
+    userNode("q", 1),
+    assistantNode(1, 1, { usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 }, messageId: "m1" })
+  ]);
+  /* 0.2.x 形状：无 provenance，身份由 request/header 落盘的计划配置承载。 */
+  const requests = [
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      requestConfig: { provider: "deepseek", model: "deepseek-chat", temperature: 0.7 }
+    }
+  ];
+  const joined = joinRequestInsights(rows, requests);
+  assert.equal(joined[0].steps[0].model, "deepseek-chat");
+  assert.equal(joined[0].steps[0].provider, "deepseek");
+  assert.deepEqual(joined[0].models, ["deepseek-chat"]);
+  /* 计价回归：step 模型非空 → 命中价目条目 → 行费用非 null（KPI 恢复金额）。 */
+  const priced = priceTurnRows(joined, DEFAULT_PRICE_TABLE);
+  assert.notEqual(priced[0].cost, null);
+  assert.equal(priced[0].cost, 2 + 3); /* deepseek-chat：输入 ¥2/MTok + 输出 ¥3/MTok */
+  assert.deepEqual(priced[0].unmatched, []);
+  assert.notEqual(priced[0].stepPrices[0], null);
+});
+
+test("0.2.x 契约：providerMetadata 与 requestConfig 模型名不一致 → 取 providerMetadata（最终身份）", () => {
+  const rows = foldTurns([assistantNode(1, 1, { usage: { inputTokens: 1 } })]);
+  const requests = [
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      providerMetadata: { provider: "gw", model: "served-model" },
+      requestConfig: { provider: "plan", model: "planned-model", temperature: 0.3 }
+    }
+  ];
+  const joined = joinRequestInsights(rows, requests);
+  /* 完成请求的最终身份（实际供服）优先于计划配置（网关重路由时按前者计价）。 */
+  assert.equal(joined[0].steps[0].model, "served-model");
+  assert.equal(joined[0].steps[0].provider, "gw");
+  /* 调用参数弹层口径不变：仍取 requestConfig 的已报告字段。 */
+  assert.equal(joined[0].steps[0].requestConfig.temperature, 0.3);
+  assert.equal(joined[0].steps[0].requestConfig.model, "planned-model");
+});
+
+test("载体原子性：providerMetadata.model 无效（空串/非字符串）→ 整体跳过，取 requestConfig 完整配对", () => {
+  const rows = foldTurns([
+    assistantNode(1, 1, { usage: { inputTokens: 1 } }),
+    assistantNode(1, 2, { usage: { inputTokens: 1 } })
+  ]);
+  const requests = [
+    /* 空串模型 */
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      providerMetadata: { provider: "gw-provider", model: "" },
+      requestConfig: { provider: "plan-provider", model: "planned-model" }
+    },
+    /* 非字符串模型 */
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 2,
+      providerMetadata: { provider: "gw-provider", model: 42 },
+      requestConfig: { provider: "plan-provider", model: "planned-model" }
+    }
+  ];
+  const joined = joinRequestInsights(rows, requests);
+  for (const step of joined[0].steps) {
+    /* 无效载体整体缺席 → 采用 requestConfig 的完整配对，MUST NOT 拼配 gw-provider。 */
+    assert.equal(step.model, "planned-model");
+    assert.equal(step.provider, "plan-provider");
+  }
+});
+
+test("载体原子性：model 有效而 provider 无效 → (model, null)，不降级到后续载体的计划模型", () => {
+  const rows = foldTurns([
+    assistantNode(1, 1, { usage: { inputTokens: 1 } }),
+    assistantNode(1, 2, { usage: { inputTokens: 1 } })
+  ]);
+  const requests = [
+    /* 空串 provider */
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      providerMetadata: { provider: "", model: "served-model" },
+      requestConfig: { provider: "plan-provider", model: "planned-model" }
+    },
+    /* 非字符串 provider */
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 2,
+      providerMetadata: { provider: 7, model: "served-model" },
+      requestConfig: { provider: "plan-provider", model: "planned-model" }
+    }
+  ];
+  const joined = joinRequestInsights(rows, requests);
+  for (const step of joined[0].steps) {
+    assert.equal(step.model, "served-model");
+    assert.equal(step.provider, null); /* 等效匹配任意路由条目 */
+  }
+});
+
+test("0.1.x 契约（仅 provenance）与修复前基线一致；混装时 provenance 仍居链首", () => {
+  const rows = foldTurns([assistantNode(1, 1, { usage: { inputTokens: 10 } })]);
+  const requests = [
+    { purpose: "assistant", turn: 1, step: 1, provenance: { provider: "ds", model: "deepseek-chat" } }
+  ];
+  const joined = joinRequestInsights(rows, requests);
+  assert.equal(joined[0].steps[0].provider, "ds");
+  assert.equal(joined[0].steps[0].model, "deepseek-chat");
+  assert.deepEqual(joined[0].models, ["deepseek-chat"]);
+  /* 旧契约兼容优先级：provenance 存在时不被新载体覆盖。 */
+  const mixed = joinRequestInsights(foldTurns([assistantNode(1, 1, { usage: { inputTokens: 10 } })]), [
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      provenance: { provider: "legacy", model: "legacy-model" },
+      providerMetadata: { provider: "new", model: "new-model" }
+    }
+  ]);
+  assert.equal(mixed[0].steps[0].model, "legacy-model");
+  assert.equal(mixed[0].steps[0].provider, "legacy");
+});
+
+test("全载体缺席：模型保持 null、该步不计价（「未定价」如实披露）", () => {
+  const rows = foldTurns([assistantNode(1, 1, { usage: { inputTokens: 1_000 } })]);
+  const joined = joinRequestInsights(rows, [
+    {
+      purpose: "assistant",
+      turn: 1,
+      step: 1,
+      /* 载体存在但模型无效 = 全部缺席（如无 durable 消息、无 header 落盘的旧会话段）。 */
+      providerMetadata: { provider: "gw", model: "" },
+      requestConfig: { provider: "plan", model: "" }
+    }
+  ]);
+  assert.equal(joined[0].steps[0].model, null);
+  assert.equal(joined[0].steps[0].provider, null);
+  const priced = priceTurnRows(joined, DEFAULT_PRICE_TABLE);
+  assert.equal(priced[0].cost, null);
+  assert.deepEqual(priced[0].unmatched, ["未知模型:无价目"]);
+});
+
+test("节点侧身份优先（fill-only-missing）：节点 provenance / 0.2.x providerMetadata 各一例", () => {
+  /* 0.1.x 节点 provenance 优先于请求级新载体。 */
+  const legacy = joinRequestInsights(
+    foldTurns([
+      assistantNode(1, 1, { provenance: { provider: "node", model: "node-model" }, usage: { inputTokens: 1 } })
+    ]),
+    [{ purpose: "assistant", turn: 1, step: 1, providerMetadata: { provider: "req", model: "req-model" } }]
+  );
+  assert.equal(legacy[0].steps[0].model, "node-model");
+  assert.equal(legacy[0].steps[0].provider, "node");
+  /* 0.2.x 节点 providerMetadata（类型已声明、宿主未来填充）优先于请求级 requestConfig；
+     join 未触及时 fold 层也能直接产出节点身份（row.models）。 */
+  const modernRows = foldTurns([
+    assistantNode(1, 1, { providerMetadata: { provider: "node", model: "node-model" }, usage: { inputTokens: 1 } })
+  ]);
+  assert.equal(modernRows[0].steps[0].model, "node-model");
+  assert.deepEqual(modernRows[0].models, ["node-model"]);
+  const modern = joinRequestInsights(modernRows, [
+    { purpose: "assistant", turn: 1, step: 1, requestConfig: { provider: "plan", model: "plan-model" } }
+  ]);
+  assert.equal(modern[0].steps[0].model, "node-model");
+  assert.equal(modern[0].steps[0].provider, "node");
+});
+
+test("0.2.x 契约：同键重试链 last-wins（采用最终尝试的 providerMetadata）", () => {
+  const rows = foldTurns([assistantNode(1, 1, { usage: { inputTokens: 1 } })]);
+  const requests = [
+    { purpose: "assistant", turn: 1, step: 1, providerMetadata: { provider: "gw", model: "attempt-1" }, status: "error" },
+    { purpose: "assistant", turn: 1, step: 1, providerMetadata: { provider: "gw", model: "attempt-2" }, status: "complete" }
+  ];
+  assert.equal(joinRequestInsights(rows, requests)[0].steps[0].model, "attempt-2");
+});
+
+test("join 形状零变更：steps 字段集合不变；空请求清单返回原引用", () => {
+  const rows = foldTurns([assistantNode(1, 1, { usage: { inputTokens: 1 } })]);
+  const before = Object.keys(rows[0].steps[0]).sort();
+  const joined = joinRequestInsights(rows, [
+    { purpose: "assistant", turn: 1, step: 1, providerMetadata: { provider: "gw", model: "m" } }
+  ]);
+  /* 修复只改取值来源，不新增诊断字段（共享缓存/紧凑编码零波及）。 */
+  assert.deepEqual(Object.keys(joined[0].steps[0]).sort(), before);
+  assert.equal(joinRequestInsights(rows, []), rows);
+});
+
+/* ---------------------------------------------------------------- *
  * 共享折叠产物（perf-hot-path-optimization 任务 2.2，D1/R1）
  * ---------------------------------------------------------------- */
 

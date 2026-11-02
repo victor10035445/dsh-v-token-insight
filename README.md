@@ -6,7 +6,7 @@ DeepSeek Harness Web 客户端的 **Token 统计与费用洞察插件**——把
 
 纯客户端、零内核改动：不替换、不禁用任何官方插件，数据全部来自宿主既有投影、会话窗口与本地逐步账本。
 
-> **宿主版本门槛：DSH 0.1.2-rc.1 及以上**（v0.4.0 起适配 dsh-012 宿主 API：`useChat`/`useTrajectory` 拆分、`ctx.remote` typert 面、`data-shell-overlay` 几何锚；引导基线已清空）。旧版宿主请勿升级。
+> **宿主版本门槛：DSH 0.1.2-rc.1 及以上**（v0.4.0 起适配 dsh-012 宿主 API：`useChat`/`useTrajectory` 拆分、`ctx.remote` typert 面、`data-shell-overlay` 几何锚；引导基线已清空；**v0.4.1 起适配 dsh 0.2.1-rc.5 trajectory 契约**——模型身份改由 `providerMetadata`/`requestConfig` 承载、`provenance` 移除，向下兼容 0.1.x 形状）。旧版宿主请勿升级。
 
 ## 功能一览
 
@@ -49,7 +49,7 @@ dsh plugin --profile web add "link:<克隆路径>"
 
 ```
 pnpm install && pnpm build   # 产出 lib/client.js
-npm pack                     # 产出 dsh-v-token-insight-0.4.0.tgz
+npm pack                     # 产出 dsh-v-token-insight-0.4.1.tgz
 dsh plugin --profile web add "<tgz 的绝对路径>"
 ```
 

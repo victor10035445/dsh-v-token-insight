@@ -6,7 +6,7 @@ A **token usage & cost insight plugin** for the DeepSeek Harness Web client — 
 
 Pure client-side, zero kernel changes: it replaces or disables no official plugin, and all data comes from the host's existing projections, session windows, and the local per-step ledger.
 
-> **Host version requirement: DSH 0.1.2-rc.1 and above** (v0.4.0 targets the dsh-012 host APIs: the `useChat`/`useTrajectory` split, the `ctx.remote` typert surface, and the `data-shell-overlay` geometry anchor; the bootstrap baseline is now empty). Do not upgrade on older hosts.
+> **Host version requirement: DSH 0.1.2-rc.1 and above** (v0.4.0 targets the dsh-012 host APIs: the `useChat`/`useTrajectory` split, the `ctx.remote` typert surface, and the `data-shell-overlay` geometry anchor; the bootstrap baseline is now empty. **v0.4.1 targets the dsh 0.2.1-rc.5 trajectory contract** — model identity moves to `providerMetadata`/`requestConfig` with `provenance` removed, while remaining backward compatible with 0.1.x shapes). Do not upgrade on older hosts.
 
 ## Features at a Glance
 
@@ -49,7 +49,7 @@ dsh plugin --profile web add "link:<clone-path>"
 
 ```
 pnpm install && pnpm build   # produces lib/client.js
-npm pack                     # produces dsh-v-token-insight-0.4.0.tgz
+npm pack                     # produces dsh-v-token-insight-0.4.1.tgz
 dsh plugin --profile web add "<absolute-path-to-tgz>"
 ```
 
