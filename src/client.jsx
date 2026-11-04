@@ -5118,14 +5118,29 @@ function updateTierPrices(tier, bucket, value) {
 }
 
 const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
-  const currentId = useSessions((s) => s.current);
-  const addressedSubagent = useSessions((s) => s.currentAddress !== void 0);
+  /* root 作用域 sessions store 是列表面（ids/byId，无会话级 current）：
+     优先取宿主若提供的 current；否则回退「最近活跃的非子会话」——
+     从总览页打开编辑器时，该会话即用户正在工作的会话。 */
+  const sessionsStore = useSessions((s) => s);
+  const currentId = useMemo(() => {
+    const direct = sessionsStore?.current;
+    if (typeof direct === "string" && direct !== "") return direct;
+    const rows = (sessionsStore?.ids ?? [])
+      .map((id) => sessionsStore?.byId?.[id])
+      .filter((r) => typeof r?.id === "string" && r?.origin !== "subagent");
+    rows.sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
+    return rows[0]?.id ?? null;
+  }, [sessionsStore]);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(null);
   const [selected, setSelected] = useState(0);
   const [importText, setImportText] = useState("");
   const [error, setError] = useState(null);
   const [catalog, setCatalog] = useState(null);
+  /* 当前会话的模型选择（modelSelection 投影的 next；0.1.2 无此通道则为 null）。 */
+  const [selection, setSelection] = useState(null);
+  /* 诊断链：「当前会话模型」行不渲染时，展示门控/RPC 各环节的实际取值。 */
+  const [diag, setDiag] = useState("");
 
   useEffect(() => {
     const onEdit = () => {
@@ -5159,31 +5174,76 @@ const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
 
   /* 模型目录（对齐 DSH 配置的模型清单）：remote.session.modelCatalog 全局 RPC
      （0.1.2-rc.1：无参数、不区分会话；子会话可用性由本地 currentAddress/
-     subagentAddress 判定先行拦截——原会话级 sessions.models RPC 已移除）。
-     失败静默降级手动输入。 */
+     subagentAddress 判定先行拦截——原会话级 sessions.models RPC 已移除。
+     0.2.x 起返回形状改为 {default, groups, ...}，不再有 current）。
+     失败静默降级手动输入。
+     会话级模型选择另走 modelSelection 投影（0.2.x remote.session.projections，
+     next = pending ?? lastUsed，宿主权威）；0.1.2 无该 RPC 时可选链静默跳过，
+     由 catalog.current（旧形状）→ catalog.default（部署默认）链式兜底。 */
   useEffect(() => {
-    if (!open || !currentId || addressedSubagent || !pluginCtx) {
+    if (!open || !pluginCtx) {
       setCatalog(null);
+      setSelection(null);
+      setDiag(`gate: open=${open} pluginCtx=${!!pluginCtx}`);
       return;
     }
+    const remoteSession = pluginCtx?.get?.("remote")?.session;
     let alive = true;
+    setDiag(
+      `rpc: remoteSession=${remoteSession ? "有" : "无"} modelCatalog=${typeof remoteSession?.modelCatalog} projections=${typeof remoteSession?.projections} sessionId=${currentId ?? "-"}`
+    );
     try {
-      pluginCtx
-        .get("remote")
-        ?.session?.modelCatalog?.()
+      remoteSession
+        ?.modelCatalog?.()
         .then((remote) => {
-          if (alive) setCatalog(remote?.ok ? remote.value : null);
+          if (!alive) return;
+          const v = remote?.ok ? remote.value : null;
+          setCatalog(v);
+          setDiag(
+            (d) =>
+              d +
+              ` | catalog: ok=${remote?.ok} groups=${v?.groups?.length ?? "-"} default=${v?.default ? `${v.default.provider}/${v.default.model}` : "-"}`
+          );
         })
-        .catch(() => {
-          if (alive) setCatalog(null);
+        .catch((e) => {
+          if (alive) setDiag((d) => d + ` | catalog: 异步失败 ${e?.message ?? e}`);
         });
-    } catch {
+    } catch (e) {
       setCatalog(null);
+      setDiag((d) => d + ` | catalog: 同步异常 ${e}`);
+    }
+    if (!currentId) {
+      setDiag((d) => d + " | projections: 跳过（列表无候选会话）");
+    } else try {
+      remoteSession
+        ?.projections?.({ sessionId: currentId })
+        ?.then((remote) => {
+          if (!alive) return;
+          const ms = remote?.ok ? remote.value?.values?.modelSelection ?? null : null;
+          const next = ms?.next ?? null;
+          setSelection(
+            typeof next?.provider === "string" && next.provider !== "" &&
+              typeof next?.model === "string" && next.model !== ""
+              ? { provider: next.provider, model: next.model }
+              : null
+          );
+          setDiag(
+            (d) =>
+              d +
+              ` | projections: ok=${remote?.ok} ms=${ms ? JSON.stringify(ms) : "null"}`
+          );
+        })
+        ?.catch((e) => {
+          if (alive) setDiag((d) => d + ` | projections: 异步失败 ${e?.message ?? e}`);
+        });
+    } catch (e) {
+      setSelection(null);
+      setDiag((d) => d + ` | projections: 同步异常 ${e}`);
     }
     return () => {
       alive = false;
     };
-  }, [open, currentId, addressedSubagent]);
+  }, [open, currentId]);
 
   /* 3.4 实时预览：打开时对当前会话的事件窗口离线折叠一次，随草稿重算
      （0.1.2-rc.1：会话快照不再携带 chat.legacy.nodes，采样改走 eventSource）。 */
@@ -5207,6 +5267,10 @@ const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
   );
 
   if (!open || !draft) return null;
+
+  /* 当前会话模型：投影 next（会话真相）→ catalog.current（0.1.2 旧形状）→
+     catalog.default（部署默认，即全新会话下一次请求将用的模型）。 */
+  const currentModel = selection ?? catalog?.current ?? catalog?.default ?? null;
 
   const entry = draft[Math.min(selected, draft.length - 1)];
   const entryIndex = draft.indexOf(entry);
@@ -5310,23 +5374,28 @@ const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
 
           <section className="tsn-section">
             <div className="tsn-section-label">{t("editor.entry", { index: entryIndex + 1 })}</div>
-            {catalog ? (
+            {!currentModel && diag ? (
+              <div className="tsn-note">诊断: {diag}</div>
+            ) : null}
+            {currentModel || catalog ? (
               <>
-                <datalist id="tsn-model-options">
-                  {catalog.groups.flatMap((group) =>
-                    (group.models ?? []).map((model) => (
-                      <option key={`${group.id}:${model.id}`} value={model.id}>
-                        {group.name} · {model.name}
-                      </option>
-                    ))
-                  )}
-                </datalist>
-                {catalog.current ? (
+                {catalog ? (
+                  <datalist id="tsn-model-options">
+                    {catalog.groups.flatMap((group) =>
+                      (group.models ?? []).map((model) => (
+                        <option key={`${group.id}:${model.id}`} value={model.id}>
+                          {group.name} · {model.name}
+                        </option>
+                      ))
+                    )}
+                  </datalist>
+                ) : null}
+                {currentModel ? (
                   <div className="tsn-row-actions">
                     <span className="tsn-note">
                       {t("editor.catalog.current", {
-                        provider: catalog.current.provider,
-                        model: catalog.current.model
+                        provider: currentModel.provider,
+                        model: currentModel.model
                       })}
                     </span>
                     <button
@@ -5336,8 +5405,8 @@ const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
                         setDraft(
                           updateEntry(draft, entryIndex, (item) => ({
                             ...item,
-                            model: catalog.current.model,
-                            provider: catalog.current.provider
+                            model: currentModel.model,
+                            provider: currentModel.provider
                           }))
                         )
                       }
@@ -5347,8 +5416,6 @@ const PriceEditorOverlay = function PriceEditorOverlay({ useSessions, t }) {
                   </div>
                 ) : null}
               </>
-            ) : addressedSubagent ? (
-              <div className="tsn-note">{t("editor.catalog.unavailable")}</div>
             ) : null}
             <div className="tsn-form-grid">
               <div className="tsn-field">
