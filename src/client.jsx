@@ -18,9 +18,13 @@
  *     · 顶部菜单「用量」入口（order 10）：仅 Windows 桌面端（宿主标题栏
  *       `data-windows-titlebar`），自绘按钮贴齐 Desktop preload 注入的
  *       「应用 / 编辑」菜单栏几何；测量不可得即整体不渲染（静默降级）。
+ *       常驻开关：总览页打开期间按钮保持可见可点（页帧避让标题栏为主，
+ *       z-index:1001 > 页帧 1000 为兜底）。
  *     · Token统计总览整页帧（order 40）：覆盖会话列与右栏、避让侧栏
  *       （AppFrame 侧栏列测量 + ResizeObserver 跟踪，降级
- *       inset:0 全覆盖 + 页内提示）；打开/关闭零选择状态副作用；ESC 分层。
+ *       inset:0 全覆盖 + 页内提示）；Windows 桌面端顶端避让标题栏条带
+ *       （不遮挡宿主与其他插件的标题栏入口）；打开/关闭零选择状态副作用；
+ *       ESC 分层。
  *     · 价目表编辑弹窗（order 50）：总览页「价格表」页签与会话页签共用。
  *
  * 数据面（杂交方案）：
@@ -827,6 +831,14 @@ body.tsn-colresizing{cursor:col-resize!important;user-select:none}
 
 /* ---- Token统计总览（shell.overlay 整页帧 + 座位） ---- */
 .tsn-dash-frame{position:absolute;top:0;right:0;bottom:0;z-index:1000;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l2);box-shadow:var(--dsw-shadow-lv2);flex-direction:column;min-width:0;display:flex;outline:none}
+/* 页帧不侵入标题栏条带（keep-top-menu-usage-entry-persistent D4）：Windows 桌面端
+   （html[data-windows-titlebar]）页帧顶端移到标题栏之下——条带内的宿主菜单按钮与
+   其他插件自绘入口（dsh-v-cosmos「星群」等，机制与本插件「用量」同类）不被页帧
+   覆盖、不被拦截点击，开页对其他插件零遮挡（D1 只抬高自己按钮不够：他插件不可
+   改，遮挡面必须从根上消除）。top 读宿主变量 live 联动，40px 回退与测量层
+   TOP_SEAT_FALLBACK_TITLEBAR_HEIGHT 同源；属性缺席（浏览器/macOS）规则不命中，
+   top:0 布局零变化。降级全帧覆盖（data-degraded）同样适用本避让。 */
+html[data-windows-titlebar] .tsn-dash-frame{top:var(--dsh-windows-titlebar-height, 40px)}
 .tsn-dash-frame[data-degraded="true"]{left:0;box-shadow:none;border-left:none}
 .tsn-dash-head{border-bottom:1px solid var(--dsw-alias-border-l2);justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;display:flex;flex-wrap:wrap}
 .tsn-dash-title{color:var(--dsw-alias-label-primary);font-size:16px;font-weight:600;line-height:24px}
@@ -950,8 +962,13 @@ body.tsn-colresizing{cursor:col-resize!important;user-select:none}
    坐标＝宿主 fixed 菜单同一坐标系，故此处只声明 fixed，不写 left/top 缺省）。
    -webkit-app-region:no-drag —— 宿主标题栏整条是拖拽区（AppFrame .frame::before
    的 drag 区），按钮必须显式挖出来才可点。无入场动画；过渡在下方
-   prefers-reduced-motion 覆盖内。 */
-.tsn-topseat{position:fixed;box-sizing:border-box;height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:14px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;-webkit-app-region:no-drag;transition:background-color .15s ease,color .15s ease}
+   prefers-reduced-motion 覆盖内。
+   z-index:1001（keep-top-menu-usage-entry-persistent）—— 常驻开关兜底层：主保证
+   是页帧避让标题栏（见 .tsn-dash-frame 规则注），正常几何下按钮与页帧不再重叠；
+   此显式 z-index（> 页帧 1000）为兜底——宿主改版 / 变量缺失等极端情形使重叠回归
+   时按钮仍不被页帧盖住（「点开用量页按钮即消失」教训）。仍低于价目表编辑弹窗
+   （.tsn-modal-root）与宿主菜单栏（preload）的 1100。 */
+.tsn-topseat{position:fixed;z-index:1001;box-sizing:border-box;height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:14px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;-webkit-app-region:no-drag;transition:background-color .15s ease,color .15s ease}
 .tsn-topseat:hover,.tsn-topseat[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 /* 焦点环：套件规范 brand 色（桌面端键盘用户仍需可见焦点，不复刻宿主
    pointer 模态下的隐藏行为）。负 offset 与宿主按钮同款，留在标题栏条内。 */
@@ -2250,6 +2267,16 @@ const DashboardSeat = function DashboardSeat({ wide, t, useSessions }) {
 const TOP_SEAT_BUTTON_GAP = 2; /* 宿主 shadow 样式表 [role=menubar] gap（见上） */
 const TOP_SEAT_BUTTON_HEIGHT = 28; /* 宿主按钮 height（见上），垂直居中用 */
 const TOP_SEAT_FALLBACK_TITLEBAR_HEIGHT = 40; /* --dsh-windows-titlebar-height 缺省值（见上） */
+/* 链式让位（chain-top-menu-after-cosmos-menu-seat）：dsh-v-cosmos 标题栏「星群」入口
+ * 占位宿主「编辑」右邻位（本入口旧址）时，「用量」基线右移到其右缘之后——顺序保持
+ * 应用 → 编辑 → 星群 → 用量。协调面 = 对方声明的 data-plugin-anchor 公开约定：
+ * 只读该锚点元素实时 rect（出现/消失/尺寸变化均作重测触发器），锚点缺席
+ * （cosmos 禁用 / 降级 / 未安装）时完全回落现状（基线 = 宿主末按钮右缘）。
+ * 不读对方样式表、不修改对方任何节点。 */
+const COSMOS_MENU_SEAT_SELECTOR = '[data-plugin-anchor="dsh-v-cosmos:menu-seat"]';
+/* 收敛复测轮次封顶：读数稳定即提前停；8 帧（~133ms @60fps）足够覆盖 React 异步
+ * 提交与同帧多触发（侧栏收起/展开、语言切换）的落定。 */
+const TOP_SEAT_SETTLE_MAX_ROUNDS = 8;
 
 /** 标题栏高度：读 html 上的 --dsh-windows-titlebar-height，缺席/不可解析回退 40px。 */
 function windowsTitlebarHeight() {
@@ -2265,7 +2292,9 @@ function windowsTitlebarHeight() {
 
 /**
  * 宿主菜单栏几何测量（视口坐标；降级红线：任一环不符即 null，调用侧渲染 null）。
- * left = 「编辑」（末位）按钮右缘 + 既有按钮间距；top = 标题栏垂直居中位。
+ * left = 「编辑」（末位）按钮右缘 + 既有按钮间距；cosmos「星群」锚点在场时基线取
+ * 两者右缘较大者（链式让位，顺序 = 应用 → 编辑 → 星群 → 用量）。
+ * top = 标题栏垂直居中位。
  * 纯只读：不写宿主、不做宽度估算（语言切换后一律重读 rect）。
  */
 function measureTopMenuSeat() {
@@ -2281,13 +2310,27 @@ function measureTopMenuSeat() {
     if (!last) return null;
     const buttonRect = last.getBoundingClientRect();
     if (!(buttonRect.width > 0 && buttonRect.height > 0)) return null; /* 未上屏/隐藏 */
+    /* 链式让位基线（COSMOS_MENU_SEAT_SELECTOR，见常量注）：cosmos「星群」在场且可测
+       时取两者右缘较大者——「用量」排到「星群」之后；缺席即现状（末按钮右缘）。 */
+    let baseRight = buttonRect.right;
+    try {
+      const chain = document.querySelector(COSMOS_MENU_SEAT_SELECTOR);
+      if (chain?.isConnected) {
+        const chainRect = chain.getBoundingClientRect();
+        if (chainRect.width > 0 && chainRect.height > 0 && chainRect.right > baseRight) {
+          baseRight = chainRect.right;
+        }
+      }
+    } catch {
+      /* 查询异常按锚点缺席处理（回落现状基线） */
+    }
     const mountRect = mount.getBoundingClientRect();
     /* 垂直居中：宿主菜单栏与标题栏等高（:host height = 标题栏变量），挂载盒实测
        优先、变量/常量回退——不依赖任何静态推算。 */
     const barTop = Number.isFinite(mountRect.top) ? mountRect.top : 0;
     const barHeight = mountRect.height > 0 ? mountRect.height : windowsTitlebarHeight();
     return {
-      left: Math.round(buttonRect.right + TOP_SEAT_BUTTON_GAP),
+      left: Math.round(baseRight + TOP_SEAT_BUTTON_GAP),
       top: Math.round(barTop + (barHeight - TOP_SEAT_BUTTON_HEIGHT) / 2)
     };
   } catch {
@@ -2299,12 +2342,20 @@ function measureTopMenuSeat() {
  * 顶部菜单用量入口（shell.overlay order 10 条目组件；add-top-menu-usage-entry）。
  * 渲染条件 = `data-windows-titlebar` 在场（Windows 桌面端）且宿主几何测量成功；
  * 任一不满足 → null（静默回退到仅侧栏座位形态：不抛错、不占位、不打 error 日志）。
- * 层级：order 10 低于总览页帧 40 与价目表编辑器 50——既有层级关系零变化。
- * 定位跟随（D2 + 侧栏状态触发器）：ResizeObserver 只作**重测触发器**（语言切换改变
- * 宿主按钮文本宽度，宿主菜单尺寸随之变化 → 触发）；侧栏收起/展开改写
+ * 层级（keep-top-menu-usage-entry-persistent）：slot order 10 低于价目表编辑器 50
+ * 不变；总览页打开期间本按钮常驻可见可点，作为该页开关——主保证是页帧避让标题栏
+ * 条带（`html[data-windows-titlebar] .tsn-dash-frame{top:…}`，条带内宿主与他插件
+ * 入口一律不被页帧覆盖），`.tsn-topseat` 显式 z-index:1001（> 页帧 1000）为几何
+ * 回归时的兜底；`aria-expanded` 激活态即页面打开态指示。
+ * 定位跟随（D2 + 侧栏状态触发器 + 链式让位）：ResizeObserver 只作**重测触发器**
+ * （语言切换改变宿主按钮文本宽度，宿主菜单尺寸随之变化 → 触发）；侧栏收起/展开改写
  * `--dsh-windows-menu-start`（48px ↔ 84px），宿主菜单**平移**而尺寸不变，RO 不触发，
  * 故另观察 `data-sidebar-collapsed` 属性作触发器；两类情形位置一律重读末按钮实时
- * rect。MutationObserver 兜底宿主延迟挂载。observer 随组件卸载断开。坐标系不假设
+ * rect。chain-top-menu-after-cosmos-menu-seat：cosmos「星群」锚点的出现/消失经 body
+ * MO 跟踪（syncChainAnchor）、其尺寸变化经专属 RO 触发——让位与回落都重读实时 rect；
+ * 锚点在场的每个触发集内做逐帧收敛复测（对方 DOM 位移经 React 异步提交，单帧读数
+ * 可能取到移动前位置，典型场景 = 侧栏收起/展开的同帧双触发）。
+ * MutationObserver 兜底宿主延迟挂载。observer 随组件卸载断开。坐标系不假设
  * 「条目根向上无包含块」——每次几何更新后实测自身 rect，与目标不符即一次性反向
  * 修正（见下方校正 effect）。
  */
@@ -2319,32 +2370,76 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
     let disposed = false;
     let mount = null;
     let ro = null;
+    let chainAnchor = null; /* cosmos「星群」锚点当前命中节点（null = 缺席） */
+    let chainRo = null; /* 锚点尺寸观察（文本宽度变化 → 重测让位） */
     let bodyMo = null;
     let rootMo = null;
     let collapseMo = null;
     let raf = 0;
+    let settleRaf = 0;
+    let settleRounds = 0;
     let lastKey = "\u0000"; /* 哨兵：首次测量即使为 null 也要提交一次 */
 
     const commit = (measurement) => {
       const key = measurement === null ? "null" : `${measurement.left}:${measurement.top}`;
-      if (key === lastKey) return;
+      if (key === lastKey) return false;
       lastKey = key;
       correctionRef.current = 0;
       setGeometry(measurement);
+      return true;
     };
     const measureNow = () => {
-      if (disposed) return;
-      commit(measureTopMenuSeat());
+      if (disposed) return false;
+      return commit(measureTopMenuSeat());
+    };
+    /* 链式让位的收敛复测（侧栏收起/展开错位修正）：让位基线读 cosmos「星群」实时
+       rect，而对方按钮的 DOM 位移经 React 异步提交——同帧双触发场景（侧栏切换时
+       双方都由 data-sidebar-collapsed 触发重测）本插件先测到的是对方移动前的旧
+       rect；且旧 rect 参与的 max 可能与上一态数值恰好相同（对称平移），「坐标无
+       变化」不能作为稳定判据。故凡链式锚点在场，每个触发集内测量后无条件追加
+       逐帧复测：有变化续测、稳定即停（TOP_SEAT_SETTLE_MAX_ROUNDS 封顶防振荡）。 */
+    const scheduleSettle = () => {
+      if (disposed || settleRaf) return;
+      if (!chainAnchor || settleRounds >= TOP_SEAT_SETTLE_MAX_ROUNDS) return;
+      settleRounds += 1;
+      settleRaf = requestAnimationFrame(() => {
+        settleRaf = 0;
+        if (measureNow()) scheduleSettle();
+      });
     };
     const schedule = () => {
       if (raf) cancelAnimationFrame(raf);
+      settleRounds = 0; /* 新触发 → 新收敛预算 */
       raf = requestAnimationFrame(() => {
         raf = 0;
         measureNow();
+        scheduleSettle();
       });
     };
+    /* 链式让位锚点同步（COSMOS_MENU_SEAT_SELECTOR，见常量注）：锚点出现/消失/换节点
+       即重绑其 RO 并立即重测一次（让位生效 / 回落现状）；锚点尺寸变化由该 RO 触发重测
+       （语言切换改写「星群」文本宽度）。查询仅在 bind 与 body 突变批次中各执行一次。 */
+    const syncChainAnchor = () => {
+      if (disposed) return;
+      let chain = null;
+      try {
+        chain = document.querySelector(COSMOS_MENU_SEAT_SELECTOR);
+      } catch {
+        chain = null;
+      }
+      if (chain === chainAnchor) return;
+      chainAnchor = chain;
+      chainRo?.disconnect();
+      chainRo = null;
+      if (chain && typeof ResizeObserver !== "undefined") {
+        chainRo = new ResizeObserver(schedule);
+        chainRo.observe(chain);
+      }
+      schedule();
+    };
     /* 绑定宿主观察：挂载元素尺寸变化（语言切换 → 菜单更宽）作重测触发器；
-       末按钮也纳入观察（文本宽度直接变化时同样触发），重定位仍重读其 rect。 */
+       末按钮也纳入观察（文本宽度直接变化时同样触发），重定位仍重读其 rect；
+       末尾同步链式让位锚点（首次绑定与重绑定路径都覆盖）。 */
     const bind = () => {
       let next = null;
       try {
@@ -2352,31 +2447,39 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
       } catch {
         next = null;
       }
-      if (next === mount && next?.isConnected) return;
-      mount = next;
-      ro?.disconnect();
-      ro = null;
-      if (!mount || typeof ResizeObserver === "undefined") return;
-      ro = new ResizeObserver(schedule);
-      ro.observe(mount);
-      try {
-        const buttons = mount.shadowRoot?.querySelectorAll?.("button");
-        const last = buttons && buttons.length > 0 ? buttons[buttons.length - 1] : null;
-        if (last) ro.observe(last);
-      } catch {
-        /* shadow 结构异常：仅观察挂载元素，测量层按降级红线兜底 */
+      if (next !== mount || !next?.isConnected) {
+        mount = next;
+        ro?.disconnect();
+        ro = null;
+        if (mount && typeof ResizeObserver !== "undefined") {
+          ro = new ResizeObserver(schedule);
+          ro.observe(mount);
+          try {
+            const buttons = mount.shadowRoot?.querySelectorAll?.("button");
+            const last = buttons && buttons.length > 0 ? buttons[buttons.length - 1] : null;
+            if (last) ro.observe(last);
+          } catch {
+            /* shadow 结构异常：仅观察挂载元素，测量层按降级红线兜底 */
+          }
+        }
       }
+      syncChainAnchor();
     };
 
     bind();
     measureNow();
 
     if (typeof MutationObserver !== "undefined") {
-      /* 宿主延迟挂载兜底：稳态下只做 O(1) 的 isConnected 检查，零查询开销。 */
+      /* 宿主延迟挂载兜底 + 链式让位锚点跟踪：挂载元素缺席走完整重绑；稳态批次只做
+         isConnected 检查与一次锚点选择器查询（锚点未变化则零重测，几何提交仍按键去重）。 */
       bodyMo = new MutationObserver(() => {
-        if (disposed || mount?.isConnected) return;
-        bind();
-        measureNow();
+        if (disposed) return;
+        if (!mount?.isConnected) {
+          bind();
+          measureNow();
+          return;
+        }
+        syncChainAnchor();
       });
       try {
         bodyMo.observe(document.body, { childList: true, subtree: true });
@@ -2414,7 +2517,9 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
     return () => {
       disposed = true;
       if (raf) cancelAnimationFrame(raf);
+      if (settleRaf) cancelAnimationFrame(settleRaf);
       ro?.disconnect();
+      chainRo?.disconnect();
       bodyMo?.disconnect();
       rootMo?.disconnect();
       collapseMo?.disconnect();
@@ -6130,9 +6235,12 @@ export function apply(ctx) {
   );
 
   /* 4. 顶部菜单「用量」入口（shell.overlay，root 作用域，order 10 —— Windows
-     桌面端标题栏第二入口；层级低于总览页帧 40、价目表编辑器 50，既有层级关系
-     零变化）。组件自测宿主菜单栏几何：`data-windows-titlebar` 缺席或测量失败
-     → 渲染 null（静默回退到仅侧栏座位形态）。 */
+     桌面端标题栏第二入口；slot order 低于价目表编辑器 50 不变。总览页打开期间
+     按钮常驻可见可点、作为该页开关：主保证 = 页帧避让标题栏条带（见条目 5 注），
+     `.tsn-topseat` z-index:1001 > 页帧 1000 为几何回归兜底——
+     keep-top-menu-usage-entry-persistent）。组件自测宿主菜单栏几何：
+     `data-windows-titlebar` 缺席或测量失败 → 渲染 null（静默回退到仅侧栏座位
+     形态）。 */
   ctx.slots.inject("shell.overlay", () =>
     ctx.slots.register(
       {
@@ -6146,8 +6254,10 @@ export function apply(ctx) {
   );
 
   /* 5. Token统计总览整页帧（shell.overlay，root 作用域，order 40 —
-     价目表编辑器（50）在其上层）。打开/关闭零选择状态副作用；几何
-     跟踪与降级见 useSidebarLeft。 */
+     价目表编辑器（50）在其上层）。Windows 桌面端顶端避让标题栏条带
+     （html[data-windows-titlebar] 时 top = 标题栏高度——条带内宿主与其他插件
+     入口一律不被覆盖，keep-top-menu-usage-entry-persistent D4）。打开/关闭
+     零选择状态副作用；几何跟踪与降级见 useSidebarLeft。 */
   ctx.slots.inject("shell.overlay", () =>
     ctx.slots.register(
       {
