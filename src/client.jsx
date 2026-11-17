@@ -13,8 +13,11 @@
  *  3. sidebar.footer.action —— 侧栏底部动作座位「Token统计」（list 槽、root
  *     作用域，order 20 落 cordis 座位之后、紧邻设置座位上方相邻行；wide 双形态
  *     图标按钮；ui-cordis 面板座位同款先例）。点击开关 Token统计总览页。
- *  4. shell.overlay × 2 —— 框架级浮层 list 槽（root 作用域，层容器
+ *  4. shell.overlay × 3 —— 框架级浮层 list 槽（root 作用域，层容器
  *     pointer-events:none、直接子元素 auto）：
+ *     · 顶部菜单「用量」入口（order 10）：仅 Windows 桌面端（宿主标题栏
+ *       `data-windows-titlebar`），自绘按钮贴齐 Desktop preload 注入的
+ *       「应用 / 编辑」菜单栏几何；测量不可得即整体不渲染（静默降级）。
  *     · Token统计总览整页帧（order 40）：覆盖会话列与右栏、避让侧栏
  *       （AppFrame 侧栏列测量 + ResizeObserver 跟踪，降级
  *       inset:0 全覆盖 + 页内提示）；打开/关闭零选择状态副作用；ESC 分层。
@@ -207,6 +210,8 @@ const zh = {
   "dash.seat": "Token统计",
   "dash.seat.aria": "打开 Token 统计总览",
   "dash.seat.speedTitle": "当前速度 {value}%",
+  "dash.top.seat": "用量",
+  "dash.top.seat.aria": "打开用量总览",
   "dash.close": "关闭总览",
   "dash.degraded": "侧栏几何测量不可用：已退化为全帧覆盖（临时降级，恢复后自动回到侧栏避让形态）。",
   "dash.tab.overview": "总览",
@@ -464,6 +469,8 @@ const en = {
   "dash.seat": "Token Stats",
   "dash.seat.aria": "Open the token stats overview",
   "dash.seat.speedTitle": "Current speed {value}%",
+  "dash.top.seat": "Usage",
+  "dash.top.seat.aria": "Open the token stats overview",
   "dash.close": "Close overview",
   "dash.degraded": "Sidebar geometry measurement unavailable: temporarily covering the full frame (degraded; returns to sidebar-aware layout once measurable).",
   "dash.tab.overview": "Overview",
@@ -934,11 +941,28 @@ body.tsn-colresizing{cursor:col-resize!important;user-select:none}
    注入；内缘 cover 掏空成环），MUST NOT 功能缺失。mask 通道用 currentColor/
    transparent（随令牌解析），全仪表零硬编码色值。 */
 @supports not ((mask: linear-gradient(#000, #fff)) or (-webkit-mask: linear-gradient(#000, #fff))){.tsn-seat-speedring-track{display:none}.tsn-seat-speedring-fillwrap{-webkit-mask:none;mask:none}.tsn-seat-speedring-fill{-webkit-mask:none;mask:none;background:conic-gradient(from 0deg,var(--tsn-zone,transparent) 0 calc(var(--tsn-p,0)*1%),transparent 0);border-radius:50%}.tsn-seat-speedring-fill::after{content:"";position:absolute;inset:22%;border-radius:50%;background:var(--dsw-alias-bg-base)}}
+/* ---- 顶部菜单「用量」入口（add-top-menu-usage-entry；Windows 桌面端标题栏）----
+   逐值镜像宿主 caption 按钮 chrome（Desktop preload installWindowsMenu() 的
+   shadow 样式表：height 28px / padding 0 10px / border-radius 6px /
+   font:inherit + font-size 14px / 透明底 + label-secondary；hover 与
+   [aria-expanded=true] → interactive-bg-hover + label-primary）。颜色全走
+   alias 令牌随主题联动、零硬编码色值。位置由组件以内联 left/top 注入（视口
+   坐标＝宿主 fixed 菜单同一坐标系，故此处只声明 fixed，不写 left/top 缺省）。
+   -webkit-app-region:no-drag —— 宿主标题栏整条是拖拽区（AppFrame .frame::before
+   的 drag 区），按钮必须显式挖出来才可点。无入场动画；过渡在下方
+   prefers-reduced-motion 覆盖内。 */
+.tsn-topseat{position:fixed;box-sizing:border-box;height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:14px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;-webkit-app-region:no-drag;transition:background-color .15s ease,color .15s ease}
+.tsn-topseat:hover,.tsn-topseat[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+/* 焦点环：套件规范 brand 色（桌面端键盘用户仍需可见焦点，不复刻宿主
+   pointer 模态下的隐藏行为）。负 offset 与宿主按钮同款，留在标题栏条内。 */
+.tsn-topseat:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 /* ≤900px 单列化（design D3 断点细则）：显式单列下 span 2 会制造隐式列轨，
    必须同步重置各卡 grid-column 为 auto；首卡/跨全宽卡的 1/-1 在单列下安全。 */
 @media (max-width: 900px){.tsn-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-kpis.tsn-kpis--compact{grid-template-columns:repeat(3, minmax(0, 1fr))}.tsn-charts{grid-template-columns:1fr}.tsn-charts > .tsn-card{grid-column:auto}.tsn-dash-kpis{grid-template-columns:repeat(3, minmax(0, 1fr))}.tsn-dash-grid{grid-template-columns:1fr}.tsn-dash-grid > .tsn-card{grid-column:auto}.tsn-dash-grid > .tsn-card:first-child{grid-column:auto}}
 @media (max-width: 480px){.tsn-form-grid{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-hbar-label{width:88px}.tsn-dash-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))}.tsn-dash-search{min-width:120px}.tsn-kpis.tsn-kpis--compact{grid-template-columns:repeat(3, minmax(0, 1fr))}}
-@media (prefers-reduced-motion: reduce){.tsn-bar,.tsn-btn,.tsn-modal-close,.tsn-expand,.tsn-expand svg,.tsn-card,.tsn-kpi,.tsn-dash-tab,.tsn-row td,.tsn-seg .tsn-btn,.tsn-drill,.tsn-sort svg,.tsn-seat-speed-fill,.tsn-seat-speedring-fill{transition:none}}
+/* 坐标系与尺寸类站点（座位速度环等）无入场动画；顶部菜单用量入口（add-top-menu-
+   usage-entry）与宿主标题栏菜单同源，同样只保留颜色过渡。 */
+@media (prefers-reduced-motion: reduce){.tsn-bar,.tsn-btn,.tsn-modal-close,.tsn-expand,.tsn-expand svg,.tsn-card,.tsn-kpi,.tsn-dash-tab,.tsn-row td,.tsn-seg .tsn-btn,.tsn-drill,.tsn-sort svg,.tsn-seat-speed-fill,.tsn-seat-speedring-fill,.tsn-topseat{transition:none}}
 `;
 
 function installStyles(ctx) {
@@ -1025,12 +1049,22 @@ function currentPlan(version) {
  * Token统计总览：模块级开关 store 与共享运行时
  * ------------------------------------------------------------------ */
 
-/** 总览页开关（模块级 store，座位与 overlay 两个条目共享；price-store 同款模式）。 */
+/**
+ * 总览页开关（模块级 store，座位与 overlay 两个条目共享；price-store 同款模式）。
+ * add-top-menu-usage-entry D3：另记「最近触发入口」——关闭时按它决定焦点返还
+ * 目标（侧栏座位 or 顶部菜单用量入口），两处入口 toggle 时先写入口再改开合态。
+ */
 const dashboardOpenStore = {
   open: false,
+  /** 最近一次开合动作的触发入口："seat"（侧栏座位）| "top"（顶部菜单用量）| null。 */
+  lastTrigger: null,
   listeners: new Set(),
   getSnapshot() {
     return this.open;
+  },
+  /** 记录触发入口（写入入口；关闭路径与焦点返还辅助函数据此选目标）。 */
+  markTrigger(trigger) {
+    this.lastTrigger = trigger;
   },
   subscribe(listener) {
     this.listeners.add(listener);
@@ -1056,8 +1090,26 @@ function useDashboardOpen() {
   );
 }
 
-/** 座位按钮元素（关闭页面时焦点返还座位；规格「焦点管理」）。 */
+/** 侧栏座位按钮元素（关闭页面时按触发入口返还焦点；规格「焦点管理」）。 */
 let dashboardSeatElement = null;
+
+/** 顶部菜单「用量」按钮元素（add-top-menu-usage-entry：第二入口的焦点返还目标）。 */
+let dashboardTopSeatElement = null;
+
+/**
+ * 关闭总览时按「最近触发入口」返还焦点（add-top-menu-usage-entry D3）：
+ * 顶部入口触发 → 先试顶部按钮；absent/已断开（降级卸载）→ 回退侧栏座位。
+ * 侧栏入口触发 → 侧栏座位。两处 ref 都缺席时静默跳过（不抛错）。
+ */
+function focusDashboardTrigger() {
+  const candidates = dashboardOpenStore.lastTrigger === "top" ? [dashboardTopSeatElement, dashboardSeatElement] : [dashboardSeatElement];
+  for (const candidate of candidates) {
+    if (candidate?.isConnected) {
+      candidate.focus?.();
+      return;
+    }
+  }
+}
 
 /** 页内弹窗深度（价目表编辑器打开时 ESC 只关弹窗不关页面——分层语义）。 */
 let priceEditorDepth = 0;
@@ -2055,6 +2107,7 @@ const DashboardSeat = function DashboardSeat({ wide, t, useSessions }) {
   const open = useDashboardOpen();
   const toggle = () => {
     const next = !dashboardOpenStore.getSnapshot();
+    dashboardOpenStore.markTrigger("seat");
     dashboardOpenStore.set(next);
     if (!next) dashboardSeatElement?.focus?.();
   };
@@ -2172,6 +2225,242 @@ const DashboardSeat = function DashboardSeat({ wide, t, useSessions }) {
         {gauge === null ? null : <SeatSpeedRing fillPct={gauge.fillPct} zone={gauge.zone} />}
       </button>
     </div>
+  );
+};
+
+/* ------------------------------------------------------------------ *
+ * 顶部菜单「用量」入口（add-top-menu-usage-entry；仅 Windows 桌面端）
+ * ------------------------------------------------------------------ *
+ * 宿主事实（Desktop preload lib/preload-app.cjs installWindowsMenu()）：
+ *  · 菜单栏 = document.body 下 fixed div（`host.dataset.windowsMenu = ""`，
+ *    light DOM 属性选择器稳定可达）：top:0 / left: var(--dsh-windows-menu-start,
+ *    48px) / z-index 1100 / height: var(--dsh-windows-titlebar-height) /
+ *    display:flex; align-items:center；内部 open shadowRoot（mode:"open"）
+ *    含 [role=menubar] 与**恰好两个**硬编码按钮（application / edit）；
+ *  · 按钮 chrome（shadow 样式表）：height 28px / padding 0 10px / 6px 圆角 /
+ *    `font: inherit` + font-size 14px / 透明底 + label-secondary，hover 与
+ *    aria-expanded=true → interactive-bg-hover + label-primary；
+ *    按钮间距 = shadow 样式表 `[role=menubar] { gap: 2px }`；
+ *  · 标题栏高度变量 `--dsh-windows-titlebar-height` 由 syncWindowsAppearance()
+ *    写在 html 上（40px），属性 `data-windows-titlebar` 同源注入；
+ *  · 宿主只在 `[data-shell-overlay]` 出现后才 append 菜单栏 → 挂载是异步的。
+ * 宿主未提供任何插件槽位，故本入口自绘按钮贴齐其几何；读取面只有该标记元素
+ * 与其 open shadowRoot 的按钮 rect——不读宿主样式表、不改宿主节点、不调其 IPC。
+ */
+const TOP_SEAT_BUTTON_GAP = 2; /* 宿主 shadow 样式表 [role=menubar] gap（见上） */
+const TOP_SEAT_BUTTON_HEIGHT = 28; /* 宿主按钮 height（见上），垂直居中用 */
+const TOP_SEAT_FALLBACK_TITLEBAR_HEIGHT = 40; /* --dsh-windows-titlebar-height 缺省值（见上） */
+
+/** 标题栏高度：读 html 上的 --dsh-windows-titlebar-height，缺席/不可解析回退 40px。 */
+function windowsTitlebarHeight() {
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--dsh-windows-titlebar-height");
+    const value = Number.parseFloat(raw);
+    if (Number.isFinite(value) && value > 0) return value;
+  } catch {
+    /* 非浏览器环境或读取异常 → 常量回退 */
+  }
+  return TOP_SEAT_FALLBACK_TITLEBAR_HEIGHT;
+}
+
+/**
+ * 宿主菜单栏几何测量（视口坐标；降级红线：任一环不符即 null，调用侧渲染 null）。
+ * left = 「编辑」（末位）按钮右缘 + 既有按钮间距；top = 标题栏垂直居中位。
+ * 纯只读：不写宿主、不做宽度估算（语言切换后一律重读 rect）。
+ */
+function measureTopMenuSeat() {
+  try {
+    if (typeof document === "undefined") return null;
+    if (!document.documentElement?.hasAttribute("data-windows-titlebar")) return null;
+    const mount = document.querySelector("[data-windows-menu]");
+    if (!mount) return null;
+    const shadow = mount.shadowRoot; /* preload attachShadow({ mode: "open" }) */
+    if (!shadow) return null; /* 结构不符（宿主改版）→ 静默降级 */
+    const buttons = shadow.querySelectorAll("button");
+    const last = buttons.length > 0 ? buttons[buttons.length - 1] : null;
+    if (!last) return null;
+    const buttonRect = last.getBoundingClientRect();
+    if (!(buttonRect.width > 0 && buttonRect.height > 0)) return null; /* 未上屏/隐藏 */
+    const mountRect = mount.getBoundingClientRect();
+    /* 垂直居中：宿主菜单栏与标题栏等高（:host height = 标题栏变量），挂载盒实测
+       优先、变量/常量回退——不依赖任何静态推算。 */
+    const barTop = Number.isFinite(mountRect.top) ? mountRect.top : 0;
+    const barHeight = mountRect.height > 0 ? mountRect.height : windowsTitlebarHeight();
+    return {
+      left: Math.round(buttonRect.right + TOP_SEAT_BUTTON_GAP),
+      top: Math.round(barTop + (barHeight - TOP_SEAT_BUTTON_HEIGHT) / 2)
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 顶部菜单用量入口（shell.overlay order 10 条目组件；add-top-menu-usage-entry）。
+ * 渲染条件 = `data-windows-titlebar` 在场（Windows 桌面端）且宿主几何测量成功；
+ * 任一不满足 → null（静默回退到仅侧栏座位形态：不抛错、不占位、不打 error 日志）。
+ * 层级：order 10 低于总览页帧 40 与价目表编辑器 50——既有层级关系零变化。
+ * 定位跟随（D2 + 侧栏状态触发器）：ResizeObserver 只作**重测触发器**（语言切换改变
+ * 宿主按钮文本宽度，宿主菜单尺寸随之变化 → 触发）；侧栏收起/展开改写
+ * `--dsh-windows-menu-start`（48px ↔ 84px），宿主菜单**平移**而尺寸不变，RO 不触发，
+ * 故另观察 `data-sidebar-collapsed` 属性作触发器；两类情形位置一律重读末按钮实时
+ * rect。MutationObserver 兜底宿主延迟挂载。observer 随组件卸载断开。坐标系不假设
+ * 「条目根向上无包含块」——每次几何更新后实测自身 rect，与目标不符即一次性反向
+ * 修正（见下方校正 effect）。
+ */
+const TopMenuSeat = function TopMenuSeat({ t }) {
+  const open = useDashboardOpen();
+  const buttonRef = useRef(null);
+  const [geometry, setGeometry] = useState(null);
+  /* 自校正代数（同一测量代最多校正一次，避免往返抖动）。 */
+  const correctionRef = useRef(0);
+
+  useEffect(() => {
+    let disposed = false;
+    let mount = null;
+    let ro = null;
+    let bodyMo = null;
+    let rootMo = null;
+    let collapseMo = null;
+    let raf = 0;
+    let lastKey = "\u0000"; /* 哨兵：首次测量即使为 null 也要提交一次 */
+
+    const commit = (measurement) => {
+      const key = measurement === null ? "null" : `${measurement.left}:${measurement.top}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      correctionRef.current = 0;
+      setGeometry(measurement);
+    };
+    const measureNow = () => {
+      if (disposed) return;
+      commit(measureTopMenuSeat());
+    };
+    const schedule = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        measureNow();
+      });
+    };
+    /* 绑定宿主观察：挂载元素尺寸变化（语言切换 → 菜单更宽）作重测触发器；
+       末按钮也纳入观察（文本宽度直接变化时同样触发），重定位仍重读其 rect。 */
+    const bind = () => {
+      let next = null;
+      try {
+        next = document.querySelector("[data-windows-menu]");
+      } catch {
+        next = null;
+      }
+      if (next === mount && next?.isConnected) return;
+      mount = next;
+      ro?.disconnect();
+      ro = null;
+      if (!mount || typeof ResizeObserver === "undefined") return;
+      ro = new ResizeObserver(schedule);
+      ro.observe(mount);
+      try {
+        const buttons = mount.shadowRoot?.querySelectorAll?.("button");
+        const last = buttons && buttons.length > 0 ? buttons[buttons.length - 1] : null;
+        if (last) ro.observe(last);
+      } catch {
+        /* shadow 结构异常：仅观察挂载元素，测量层按降级红线兜底 */
+      }
+    };
+
+    bind();
+    measureNow();
+
+    if (typeof MutationObserver !== "undefined") {
+      /* 宿主延迟挂载兜底：稳态下只做 O(1) 的 isConnected 检查，零查询开销。 */
+      bodyMo = new MutationObserver(() => {
+        if (disposed || mount?.isConnected) return;
+        bind();
+        measureNow();
+      });
+      try {
+        bodyMo.observe(document.body, { childList: true, subtree: true });
+      } catch {
+        /* body 未就绪：框架内不会发生，忽略 */
+      }
+      /* 标题栏标记/高度变量由 preload 写在 html 上，可能与菜单异步：属性变化重测。 */
+      rootMo = new MutationObserver(() => {
+        if (disposed) return;
+        bind();
+        measureNow();
+      });
+      try {
+        rootMo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-windows-titlebar", "style"] });
+      } catch {
+        /* 忽略 */
+      }
+      /* 侧栏收起/展开会改写 --dsh-windows-menu-start（宿主 ui-sidebar CSS：
+         `html[data-windows-titlebar]:has([data-sidebar-collapsed=true])` 置 84px，
+         展开回落到 preload 的 48px）——宿主菜单整体**平移**而尺寸不变，
+         ResizeObserver 不会触发，故另观察该状态属性仅作**重测触发器**：
+         位置仍重读末按钮实时 rect（不推算，见 D2）。 */
+      collapseMo = new MutationObserver(() => {
+        if (disposed) return;
+        schedule();
+      });
+      try {
+        collapseMo.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ["data-sidebar-collapsed"] });
+      } catch {
+        /* 忽略 */
+      }
+    }
+    window.addEventListener("resize", schedule);
+
+    return () => {
+      disposed = true;
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+      bodyMo?.disconnect();
+      rootMo?.disconnect();
+      collapseMo?.disconnect();
+      window.removeEventListener("resize", schedule);
+    };
+  }, []);
+
+  /* 坐标系实测校正（D2）：fixed 定位若落在 transform/filter 等包含块下，style
+     坐标会被平移。不假设「条目根向上无包含块」——每次几何更新后实测自身 rect，
+     与目标不符即反向修正一次；无包含块的常规情形偏差为 0，零额外渲染。 */
+  useEffect(() => {
+    if (geometry === null) return;
+    const node = buttonRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const dx = Math.round(rect.left - geometry.left);
+    const dy = Math.round(rect.top - geometry.top);
+    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return;
+    if (correctionRef.current > 0) return;
+    correctionRef.current += 1;
+    setGeometry({ left: geometry.left - dx, top: geometry.top - dy });
+  }, [geometry]);
+
+  if (geometry === null) return null;
+  const ref = (element) => {
+    buttonRef.current = element;
+    dashboardTopSeatElement = element;
+  };
+  const toggle = () => {
+    const next = !dashboardOpenStore.getSnapshot();
+    dashboardOpenStore.markTrigger("top");
+    dashboardOpenStore.set(next);
+  };
+  return (
+    <button
+      type="button"
+      ref={ref}
+      className="tsn-topseat"
+      data-plugin-anchor="token-insight:top-seat"
+      style={{ left: `${geometry.left}px`, top: `${geometry.top}px` }}
+      aria-expanded={open}
+      aria-label={t("dash.top.seat.aria")}
+      onClick={toggle}
+    >
+      {t("dash.top.seat")}
+    </button>
   );
 };
 
@@ -2734,11 +3023,12 @@ function DashboardSurface({ useSessions, useWorkspaces, t }) {
     return [line("attribution", repair.attribution), line("gap", repair.gap)];
   }, [repair, t]);
 
-  /* 焦点管理：打开移焦入页；关闭返还座位（钻取关闭例外——保持会话内焦点）。 */
+  /* 焦点管理：打开移焦入页；关闭按「最近触发入口」返还（侧栏座位 or 顶部用量
+     入口，入口 absent/已断开回退侧栏座位）；钻取关闭例外——保持会话内焦点。 */
   useEffect(() => {
     frameRef.current?.focus();
     return () => {
-      if (!dashboardClosedViaDrill) dashboardSeatElement?.focus?.();
+      if (!dashboardClosedViaDrill) focusDashboardTrigger();
       dashboardClosedViaDrill = false;
     };
   }, []);
@@ -5839,7 +6129,23 @@ export function apply(ctx) {
     )
   );
 
-  /* 4. Token统计总览整页帧（shell.overlay，root 作用域，order 40 —
+  /* 4. 顶部菜单「用量」入口（shell.overlay，root 作用域，order 10 —— Windows
+     桌面端标题栏第二入口；层级低于总览页帧 40、价目表编辑器 50，既有层级关系
+     零变化）。组件自测宿主菜单栏几何：`data-windows-titlebar` 缺席或测量失败
+     → 渲染 null（静默回退到仅侧栏座位形态）。 */
+  ctx.slots.inject("shell.overlay", () =>
+    ctx.slots.register(
+      {
+        name: "shell.overlay",
+        id: "token-insight-top-seat",
+        order: 10,
+        locale: NS
+      },
+      TopMenuSeat
+    )
+  );
+
+  /* 5. Token统计总览整页帧（shell.overlay，root 作用域，order 40 —
      价目表编辑器（50）在其上层）。打开/关闭零选择状态副作用；几何
      跟踪与降级见 useSidebarLeft。 */
   ctx.slots.inject("shell.overlay", () =>
@@ -5854,7 +6160,7 @@ export function apply(ctx) {
     )
   );
 
-  /* 5. 价目表编辑弹窗：shell.overlay 框架浮层条目（root 作用域）。
+  /* 6. 价目表编辑弹窗：shell.overlay 框架浮层条目（root 作用域）。
      入口自 settings.general.item 迁入总览页「价格表」页签（归宿 A），
      编辑器本体不变、两处共用。 */
   ctx.slots.inject("shell.overlay", () =>
