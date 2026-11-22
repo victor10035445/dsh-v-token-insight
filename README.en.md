@@ -49,7 +49,7 @@ dsh plugin --profile web add "link:<clone-path>"
 
 ```
 pnpm install && pnpm build   # produces lib/client.js
-npm pack                     # produces dsh-v-token-insight-0.4.1.tgz
+npm pack                     # produces dsh-v-token-insight-0.4.2.tgz
 dsh plugin --profile web add "<absolute-path-to-tgz>"
 ```
 

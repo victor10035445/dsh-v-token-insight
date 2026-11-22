@@ -113,6 +113,7 @@ import {
 } from "./price-store.mjs";
 import { PLAN_CHANGED_EVENT, clearPlanStore, loadPlanStore, savePlanStore } from "./plan-store.mjs";
 import { PAGE_GAP_BASE_MS, nextGapMs, smoothRtt } from "./pacing.mjs";
+import { isChainSettled } from "./top-seat-follow.mjs";
 import { BUCKET_SEGMENTS, contextBreakdownLayout, dualAxisTrendLayout, formatAxisTokens, hBarsLayout, lineLayout } from "./charts.mjs";
 import { Card, ChartCard, Footnote, KpiCard, StatBadge } from "./stats-ui.jsx";
 
@@ -2274,9 +2275,14 @@ const TOP_SEAT_FALLBACK_TITLEBAR_HEIGHT = 40; /* --dsh-windows-titlebar-height �
  * （cosmos 禁用 / 降级 / 未安装）时完全回落现状（基线 = 宿主末按钮右缘）。
  * 不读对方样式表、不修改对方任何节点。 */
 const COSMOS_MENU_SEAT_SELECTOR = '[data-plugin-anchor="dsh-v-cosmos:menu-seat"]';
-/* 收敛复测轮次封顶：读数稳定即提前停；8 帧（~133ms @60fps）足够覆盖 React 异步
- * 提交与同帧多触发（侧栏收起/展开、语言切换）的落定。 */
+/* 收敛复测轮次封顶：让位不变式成立且读数稳定即提前停；8 帧（~133ms @60fps）覆盖
+ * React 异步提交与同帧多触发（侧栏收起/展开、语言切换）的常规落定；迟到提交由锚点
+ * 属性突变（同节点位移可见性）与封顶后的有界滞后复核兜底。 */
 const TOP_SEAT_SETTLE_MAX_ROUNDS = 8;
+/* 有界滞后复核（D5）：封顶耗尽且让位不变式仍未成立时，单发一次 ~0.5s 后的重测——
+ * 兜底不落在本插件观测面（锚点属性突变）上的迟到落位（如父级/包装层驱动的位移）。
+ * 30 帧量级覆盖现实 React 提交时延带；单发、不自我续期（仅新外部触发可再武装）。 */
+const TOP_SEAT_LAG_RECHECK_DELAY_MS = 500;
 
 /** 标题栏高度：读 html 上的 --dsh-windows-titlebar-height，缺席/不可解析回退 40px。 */
 function windowsTitlebarHeight() {
@@ -2295,6 +2301,10 @@ function windowsTitlebarHeight() {
  * left = 「编辑」（末位）按钮右缘 + 既有按钮间距；cosmos「星群」锚点在场时基线取
  * 两者右缘较大者（链式让位，顺序 = 应用 → 编辑 → 星群 → 用量）。
  * top = 标题栏垂直居中位。
+ * chainAligned（harden-top-seat-chain-follow D2）= 让位不变式判据（top-seat-follow.mjs
+ * `isChainSettled`）：锚点左缘已到达或越过其槽位（宿主末按钮右缘 + 既有间距，容差 1px）
+ * 才算对齐——同一次读数顺带产出，供收敛复测决定是否续测；锚点缺席 / 不可测 / 查询
+ * 异常一律视为对齐（回落现状基线，不空转复测）。
  * 纯只读：不写宿主、不做宽度估算（语言切换后一律重读 rect）。
  */
 function measureTopMenuSeat() {
@@ -2313,16 +2323,19 @@ function measureTopMenuSeat() {
     /* 链式让位基线（COSMOS_MENU_SEAT_SELECTOR，见常量注）：cosmos「星群」在场且可测
        时取两者右缘较大者——「用量」排到「星群」之后；缺席即现状（末按钮右缘）。 */
     let baseRight = buttonRect.right;
+    let chainAligned = true; /* 锚点缺席/查询异常 = 对齐（回落现状基线，不空转复测） */
     try {
       const chain = document.querySelector(COSMOS_MENU_SEAT_SELECTOR);
       if (chain?.isConnected) {
         const chainRect = chain.getBoundingClientRect();
-        if (chainRect.width > 0 && chainRect.height > 0 && chainRect.right > baseRight) {
+        const chainMeasurable = chainRect.width > 0 && chainRect.height > 0;
+        chainAligned = isChainSettled(chainRect.left, chainMeasurable, buttonRect.right, TOP_SEAT_BUTTON_GAP);
+        if (chainMeasurable && chainRect.right > baseRight) {
           baseRight = chainRect.right;
         }
       }
     } catch {
-      /* 查询异常按锚点缺席处理（回落现状基线） */
+      /* 查询异常按锚点缺席处理（回落现状基线；判据保持「对齐」） */
     }
     const mountRect = mount.getBoundingClientRect();
     /* 垂直居中：宿主菜单栏与标题栏等高（:host height = 标题栏变量），挂载盒实测
@@ -2331,7 +2344,8 @@ function measureTopMenuSeat() {
     const barHeight = mountRect.height > 0 ? mountRect.height : windowsTitlebarHeight();
     return {
       left: Math.round(baseRight + TOP_SEAT_BUTTON_GAP),
-      top: Math.round(barTop + (barHeight - TOP_SEAT_BUTTON_HEIGHT) / 2)
+      top: Math.round(barTop + (barHeight - TOP_SEAT_BUTTON_HEIGHT) / 2),
+      chainAligned
     };
   } catch {
     return null;
@@ -2353,11 +2367,16 @@ function measureTopMenuSeat() {
  * 故另观察 `data-sidebar-collapsed` 属性作触发器；两类情形位置一律重读末按钮实时
  * rect。chain-top-menu-after-cosmos-menu-seat：cosmos「星群」锚点的出现/消失经 body
  * MO 跟踪（syncChainAnchor）、其尺寸变化经专属 RO 触发——让位与回落都重读实时 rect；
- * 锚点在场的每个触发集内做逐帧收敛复测（对方 DOM 位移经 React 异步提交，单帧读数
- * 可能取到移动前位置，典型场景 = 侧栏收起/展开的同帧双触发）。
- * MutationObserver 兜底宿主延迟挂载。observer 随组件卸载断开。坐标系不假设
- * 「条目根向上无包含块」——每次几何更新后实测自身 rect，与目标不符即一次性反向
- * 修正（见下方校正 effect）。
+ * harden-top-seat-chain-follow：锚点**同节点的纯位移**对尺寸观察不可见（对方 React
+ * 异步提交可能迟到任意帧），故随重绑一并挂锚点属性 MO（`attributes:true`，不加
+ * filter）——属性突变即重测触发器，迟到落位因此可见。锚点在场的每个触发集内做逐帧
+ * 收敛复测（对方 DOM 位移经 React 异步提交，单帧读数可能取到移动前位置，典型场景 =
+ * 侧栏收起/展开的同帧双触发）；停机判据 = 让位不变式成立（锚点左缘到达/越过槽位，
+ * 见 measureTopMenuSeat 的 chainAligned）**且**读数稳定，8 帧封顶防振荡；封顶耗尽
+ * 且仍未对齐时单发一次有界滞后复核（~0.5s，不自我续期）兜底窗口外落位。
+ * MutationObserver 兜底宿主延迟挂载。observer / 滞后复核定时器随组件卸载断开。
+ * 坐标系不假设「条目根向上无包含块」——每次几何更新后实测自身 rect，与目标不符即
+ * 一次性反向修正（见下方校正 effect）。
  */
 const TopMenuSeat = function TopMenuSeat({ t }) {
   const open = useDashboardOpen();
@@ -2372,12 +2391,16 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
     let ro = null;
     let chainAnchor = null; /* cosmos「星群」锚点当前命中节点（null = 缺席） */
     let chainRo = null; /* 锚点尺寸观察（文本宽度变化 → 重测让位） */
+    let chainMo = null; /* 锚点属性观察（同节点位移 → 重测；迟到落位可见性，D1） */
     let bodyMo = null;
     let rootMo = null;
     let collapseMo = null;
     let raf = 0;
     let settleRaf = 0;
     let settleRounds = 0;
+    let lagTimer = 0; /* 有界滞后复核定时器（单发，D5） */
+    let lagArmed = false; /* 本触发集是否已用掉复核（仅新外部触发可再武装） */
+    let lastChainAligned = true; /* 最近一次测量的让位不变式读数 */
     let lastKey = "\u0000"; /* 哨兵：首次测量即使为 null 也要提交一次 */
 
     const commit = (measurement) => {
@@ -2390,35 +2413,74 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
     };
     const measureNow = () => {
       if (disposed) return false;
-      return commit(measureTopMenuSeat());
+      const measurement = measureTopMenuSeat();
+      /* 让位不变式读数与几何同一次测量产出；null（降级 / 锚点缺席）按对齐处理。 */
+      lastChainAligned = measurement === null ? true : measurement.chainAligned !== false;
+      return commit(measurement);
     };
     /* 链式让位的收敛复测（侧栏收起/展开错位修正）：让位基线读 cosmos「星群」实时
        rect，而对方按钮的 DOM 位移经 React 异步提交——同帧双触发场景（侧栏切换时
        双方都由 data-sidebar-collapsed 触发重测）本插件先测到的是对方移动前的旧
        rect；且旧 rect 参与的 max 可能与上一态数值恰好相同（对称平移），「坐标无
-       变化」不能作为稳定判据。故凡链式锚点在场，每个触发集内测量后无条件追加
-       逐帧复测：有变化续测、稳定即停（TOP_SEAT_SETTLE_MAX_ROUNDS 封顶防振荡）。 */
+       变化」不能作为稳定判据（harden-top-seat-chain-follow）。故凡链式锚点在场，
+       每个触发集内追加逐帧复测：续测条件 = 坐标键变化 ‖ 让位不变式未成立；两者
+       皆否才停机（TOP_SEAT_SETTLE_MAX_ROUNDS 封顶防振荡）。 */
     const scheduleSettle = () => {
       if (disposed || settleRaf) return;
-      if (!chainAnchor || settleRounds >= TOP_SEAT_SETTLE_MAX_ROUNDS) return;
+      if (!chainAnchor) return;
+      if (settleRounds >= TOP_SEAT_SETTLE_MAX_ROUNDS) {
+        /* 封顶耗尽：不变式仍未成立 → 单发滞后复核兜底窗口外落位；已成立即正常停机。 */
+        scheduleLagRecheck();
+        return;
+      }
       settleRounds += 1;
       settleRaf = requestAnimationFrame(() => {
         settleRaf = 0;
-        if (measureNow()) scheduleSettle();
+        if (measureNow() || !lastChainAligned) scheduleSettle();
       });
     };
-    const schedule = () => {
+    /* 有界滞后复核（D5）：封顶耗尽且最近读数仍未对齐时，安排单发一次 ~0.5s 后的
+       重测——覆盖不落在本插件观测面（锚点属性突变）上的迟到落位（父级/包装层驱动
+       位移、过渡结束等）。不自我续期：本触发集只武装一次，复核 episode 再触顶也
+       不再续期；仅新外部触发（schedule）可重新武装。定时器并入卸载清理链。 */
+    const scheduleLagRecheck = () => {
+      if (disposed || lagTimer || lagArmed) return;
+      if (!chainAnchor || lastChainAligned) return;
+      lagArmed = true;
+      lagTimer = setTimeout(() => {
+        lagTimer = 0;
+        if (disposed) return;
+        /* 复核走与 schedule() 同一条测量/收敛路径（新的 8 轮预算），但**不**重置
+           「已复核」标记——复核自身不是新外部触发，不得自我续期。 */
+        runTrigger();
+      }, TOP_SEAT_LAG_RECHECK_DELAY_MS);
+    };
+    const runTrigger = () => {
       if (raf) cancelAnimationFrame(raf);
-      settleRounds = 0; /* 新触发 → 新收敛预算 */
+      settleRounds = 0; /* 新触发 / 复核 episode → 新收敛预算 */
       raf = requestAnimationFrame(() => {
         raf = 0;
         measureNow();
         scheduleSettle();
       });
     };
+    const schedule = () => {
+      if (disposed) return;
+      if (lagTimer) {
+        /* 新外部触发取代尚未触发的复核（收敛由其自身 episode 重新评估）。 */
+        clearTimeout(lagTimer);
+        lagTimer = 0;
+      }
+      lagArmed = false; /* 新外部触发 → 单发复核可再武装 */
+      runTrigger();
+    };
     /* 链式让位锚点同步（COSMOS_MENU_SEAT_SELECTOR，见常量注）：锚点出现/消失/换节点
-       即重绑其 RO 并立即重测一次（让位生效 / 回落现状）；锚点尺寸变化由该 RO 触发重测
-       （语言切换改写「星群」文本宽度）。查询仅在 bind 与 body 突变批次中各执行一次。 */
+       即重绑其 RO / 属性 MO 并立即重测一次（让位生效 / 回落现状）；锚点尺寸变化由该
+       RO 触发重测（语言切换改写「星群」文本宽度）；锚点**同节点属性突变**（style 位移
+       / aria-expanded 等）由属性 MO 触发重测——同节点纯位移对尺寸观察不可见，0.5.x
+       的迟到提交恰好落在该盲区（harden-top-seat-chain-follow D1；不加 attributeFilter：
+       单个 button 节点属性突变稀少，全量观察对未来契约变化最稳，触发经 rAF 合并）。
+       查询仅在 bind 与 body 突变批次中各执行一次。 */
     const syncChainAnchor = () => {
       if (disposed) return;
       let chain = null;
@@ -2431,9 +2493,25 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
       chainAnchor = chain;
       chainRo?.disconnect();
       chainRo = null;
-      if (chain && typeof ResizeObserver !== "undefined") {
-        chainRo = new ResizeObserver(schedule);
-        chainRo.observe(chain);
+      chainMo?.disconnect();
+      chainMo = null;
+      if (chain) {
+        if (typeof ResizeObserver !== "undefined") {
+          chainRo = new ResizeObserver(schedule);
+          chainRo.observe(chain);
+        }
+        if (typeof MutationObserver !== "undefined") {
+          chainMo = new MutationObserver(() => {
+            if (disposed) return;
+            schedule();
+          });
+          try {
+            chainMo.observe(chain, { attributes: true });
+          } catch {
+            /* 观察失败：按既有观察面兜底（属性突变不可见，不影响几何读取） */
+            chainMo = null;
+          }
+        }
       }
       schedule();
     };
@@ -2518,8 +2596,10 @@ const TopMenuSeat = function TopMenuSeat({ t }) {
       disposed = true;
       if (raf) cancelAnimationFrame(raf);
       if (settleRaf) cancelAnimationFrame(settleRaf);
+      if (lagTimer) clearTimeout(lagTimer);
       ro?.disconnect();
       chainRo?.disconnect();
+      chainMo?.disconnect();
       bodyMo?.disconnect();
       rootMo?.disconnect();
       collapseMo?.disconnect();

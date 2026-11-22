@@ -49,7 +49,7 @@ dsh plugin --profile web add "link:<克隆路径>"
 
 ```
 pnpm install && pnpm build   # 产出 lib/client.js
-npm pack                     # 产出 dsh-v-token-insight-0.4.1.tgz
+npm pack                     # 产出 dsh-v-token-insight-0.4.2.tgz
 dsh plugin --profile web add "<tgz 的绝对路径>"
 ```
 
